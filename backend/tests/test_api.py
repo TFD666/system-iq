@@ -20,7 +20,8 @@ from app.llm import (
     GroqProvider,
     RateLimitError,
 )
-from app.main import app, get_provider
+from app.decision.provider import FakeDecisionProvider
+from app.main import app, get_provider, get_decision_provider
 
 # ── shared fixture data ────────────────────────────────────────────────────────
 
@@ -73,10 +74,12 @@ class RateLimitProvider(LLMProvider):
 
 def make_client(provider: LLMProvider) -> TestClient:
     """
-    Override the FastAPI get_provider dependency with a fake, then build
-    a TestClient.  The override is cleared after each test via the fixture.
+    Override both FastAPI dependencies so no real LLM or Jev API is called.
+    The decision provider is always a FakeDecisionProvider in these tests.
+    The override is cleared after each test via the autouse fixture.
     """
     app.dependency_overrides[get_provider] = lambda: provider
+    app.dependency_overrides[get_decision_provider] = lambda: FakeDecisionProvider()
     return TestClient(app)
 
 
@@ -89,12 +92,13 @@ def clear_dependency_overrides():
 
 # ── /design endpoint tests ─────────────────────────────────────────────────────
 
-def test_valid_idea_returns_200_and_stage_extracted():
+def test_valid_idea_returns_200_and_stage_decided():
+    # Stage is now "decided" because the endpoint always runs extraction + decisions.
     client = make_client(AlwaysGoodProvider())
     response = client.post("/design", json={"idea": "Build a to-do app"})
     assert response.status_code == 200
     body = response.json()
-    assert body["stage"] == "extracted"
+    assert body["stage"] == "decided"   # was "extracted" before decision wiring
     assert "requirements" in body
 
 

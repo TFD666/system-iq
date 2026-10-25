@@ -113,7 +113,37 @@ class Requirements(BaseModel):
         ]
 
 
+class AlternativeOut(BaseModel):
+    """One alternative answer and its probability, safe for JSON output."""
+    option: str
+    probability: float
+
+
+class DecisionResultOut(BaseModel):
+    """
+    Serialisable form of a DecisionResult for the API response.
+    question_text is intentionally excluded – callers can look up the
+    question by id; we never echo user input back through this field.
+    """
+    id: str
+    status: str           # accepted | tentative | needs_review | yes | no | uncertain
+    choice: str | None    # selected option (None for noul)
+    probability: float
+    top_alternatives: list[AlternativeOut]
+    based_on_unknowns: bool
+
+
+class DecisionMeta(BaseModel):
+    """Token-usage and model metadata from the Jev call."""
+    decision_model: str
+    input_tokens: int
+    output_tokens: int
+
+
 class DesignResponse(BaseModel):
     # "stage" records which pipeline step produced this response
     stage: str
     requirements: Requirements
+    # Present when stage == "decided"; None for earlier stages
+    decisions: list[DecisionResultOut] | None = None
+    meta: DecisionMeta | None = None

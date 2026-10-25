@@ -12,6 +12,8 @@ from .provider import (
     JevProvider,
     Question,
 )
+from .policy import apply_policy, DecisionResult
+from .questions import build_questions, build_state
 
 __all__ = [
     "Alternative",
@@ -19,9 +21,14 @@ __all__ = [
     "DecisionFormatError",
     "DecisionProvider",
     "DecisionRateLimitError",
+    "DecisionResult",
     "DecisionResultSet",
     "DecisionUnavailableError",
     "FakeDecisionProvider",
     "JevProvider",
     "Question",
+    "apply_policy",
+    "build_questions",
+    "build_state",
 ]
+
