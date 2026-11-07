@@ -167,7 +167,18 @@ def send_to_backend(text: str, api_url: str) -> None:
         print("error: unexpected response from backend", file=sys.stderr)
         sys.exit(1)
 
-    # Print the requirements object as human-readable indented JSON
+    # Warn if the decision provider charged real money or billed as non-free.
+    meta = data.get("meta") or {}
+    billing = meta.get("decision_billing")
+    cost = meta.get("decision_cost")
+    if (cost is not None and cost > 0) or (billing is not None and billing != "free"):
+        print(
+            f"warning: Jev billed as '{billing}' with cost={cost}. "
+            "Check OPENCODE_API_KEY usage.",
+            file=sys.stderr,
+        )
+
+    # Print the full response as human-readable indented JSON
     print(json.dumps(data, indent=2))
 
 

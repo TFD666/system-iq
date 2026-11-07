@@ -33,7 +33,7 @@ class DecisionResult:
     This is what goes into the API response, not the raw Decision.
     """
     id: str
-    question_text: str          # the original question text
+    question: str               # fixed template sentence for this question id
     status: str                 # "accepted" | "tentative" | "needs_review" | "yes" | "no" | "uncertain"
     choice: str | None          # the selected option (None for noul)
     probability: float          # top probability (yes-probability for noul)
@@ -109,7 +109,7 @@ def apply_policy(
 
         return DecisionResult(
             id=decision.id,
-            question_text=question.text,
+            question=question.text,
             status=status,
             choice=None,
             probability=p,
@@ -130,7 +130,7 @@ def apply_policy(
 
     return DecisionResult(
         id=decision.id,
-        question_text=question.text,
+        question=question.text,
         status=status,
         choice=decision.choice,
         probability=top_p,

@@ -160,6 +160,7 @@ def design(
         decision_results.append(
             DecisionResultOut(
                 id=dr.id,
+                question=dr.question,
                 status=dr.status,
                 choice=dr.choice,
                 probability=dr.probability,
@@ -175,6 +176,8 @@ def design(
         decision_model=result_set.model,
         input_tokens=result_set.input_tokens,
         output_tokens=result_set.output_tokens,
+        decision_billing=result_set.billing_source,
+        decision_cost=result_set.cost,
     )
 
     return DesignResponse(

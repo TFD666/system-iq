@@ -122,10 +122,10 @@ class AlternativeOut(BaseModel):
 class DecisionResultOut(BaseModel):
     """
     Serialisable form of a DecisionResult for the API response.
-    question_text is intentionally excluded – callers can look up the
-    question by id; we never echo user input back through this field.
+    'question' is always a fixed template sentence, never user input.
     """
     id: str
+    question: str         # fixed template sentence describing what was asked
     status: str           # accepted | tentative | needs_review | yes | no | uncertain
     choice: str | None    # selected option (None for noul)
     probability: float
@@ -138,6 +138,9 @@ class DecisionMeta(BaseModel):
     decision_model: str
     input_tokens: int
     output_tokens: int
+    # Set when the provider reports billing info; None for fake/unknown providers.
+    decision_billing: str | None = None
+    decision_cost: float | None = None
 
 
 class DesignResponse(BaseModel):

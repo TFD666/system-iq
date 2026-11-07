@@ -544,3 +544,224 @@ def test_build_questions_map():
 def test_decision_provider_is_abstract():
     with pytest.raises(TypeError):
         DecisionProvider()  # type: ignore[abstract]
+
+
+# ---------------------------------------------------------------------------
+# Fixture helpers
+# ---------------------------------------------------------------------------
+
+import pathlib
+
+FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures"
+
+
+def _load_fixture(name: str) -> dict[str, Any]:
+    """Load a JSON fixture file from backend/tests/fixtures/.
+    Uses utf-8-sig encoding to strip a UTF-8 BOM if present.
+    """
+    text = (FIXTURES_DIR / name).read_bytes().decode("utf-8-sig")
+    return json.loads(text)
+
+
+# ---------------------------------------------------------------------------
+# Test: parse the REAL OpenCode Jev response fixture
+# ---------------------------------------------------------------------------
+
+
+def test_parses_real_opencode_fixture():
+    """
+    JevProvider must parse jev_opencode_choice_probe.json correctly.
+    The fixture has 2 noul answers + 1 choice answer.  The answer dict
+    order in the JSON differs from our question list order (the parser must
+    look up by id, not by position).
+    """
+    fixture = _load_fixture("jev_opencode_choice_probe.json")
+
+    # Questions in a different order from the fixture's answers dict.
+    questions = [
+        Question(id="database", kind="choice", text="Which database?",
+                 options=["PostgreSQL", "DynamoDB", "MongoDB", "PostgreSQL + PostGIS"]),
+        Question(id="needs_payments", kind="noul", text="Need payments?"),
+        Question(id="needs_geospatial", kind="noul", text="Need geospatial?"),
+    ]
+
+    provider = _make_provider()
+    mock_resp = _mock_response(fixture)
+
+    with patch("app.decision.provider.httpx.post", return_value=mock_resp):
+        result = provider.decide({}, questions)
+
+    # Token counts match usage block.
+    assert result.input_tokens == 414
+    assert result.output_tokens == 99
+
+    # Noul: needs_geospatial
+    geo = result.decisions["needs_geospatial"]
+    assert geo.kind == "noul"
+    assert geo.probability == pytest.approx(0.97)
+
+    # Noul: needs_payments
+    pay = result.decisions["needs_payments"]
+    assert pay.kind == "noul"
+    assert pay.probability == pytest.approx(0.05)
+
+    # Choice: database
+    db = result.decisions["database"]
+    assert db.kind == "choice"
+    assert db.choice == "PostgreSQL + PostGIS"
+    assert db.confidence == pytest.approx(0.96)
+
+    # All four probabilities present as alternatives.
+    alt_map = {a.option: a.probability for a in db.alternatives}
+    assert alt_map["PostgreSQL"] == pytest.approx(0.0)
+    assert alt_map["DynamoDB"] == pytest.approx(0.01)
+    assert alt_map["MongoDB"] == pytest.approx(0.02)
+    assert alt_map["PostgreSQL + PostGIS"] == pytest.approx(0.97)
+
+    # probability field = probability of the selected choice.
+    assert db.probability == pytest.approx(0.97)
+
+
+def test_real_fixture_billing_source_and_cost():
+    """
+    The fixture reports billing_source='free' and cost=0.
+    DecisionResultSet must expose those values.
+    """
+    fixture = _load_fixture("jev_opencode_choice_probe.json")
+    questions = [
+        Question(id="database", kind="choice", text="Which database?",
+                 options=["PostgreSQL", "DynamoDB", "MongoDB", "PostgreSQL + PostGIS"]),
+        Question(id="needs_payments", kind="noul", text="Need payments?"),
+        Question(id="needs_geospatial", kind="noul", text="Need geospatial?"),
+    ]
+
+    provider = _make_provider()
+    with patch("app.decision.provider.httpx.post",
+               return_value=_mock_response(fixture)):
+        result = provider.decide({}, questions)
+
+    assert result.billing_source == "free"
+    assert result.cost == pytest.approx(0.0)
+
+
+def test_extra_usage_keys_are_tolerated():
+    """
+    A usage block with extra keys (opencode.tokens.*, list_cost, etc.)
+    must not cause a parse error.
+    """
+    body = {
+        "model": "jev-1.13-free",
+        "answers": {"needs_cache": {"type": "noul", "noul": 0.5}},
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cost": 0,
+            "unknown_future_key": "ignored",
+            "opencode": {
+                "billing_source": "free",
+                "list_cost": 0,
+                "tokens": {
+                    "input": 10, "output": 5,
+                    "reasoning": 0, "cache_read": 0,
+                    "cache_write_5m": 0, "cache_write_1h": 0,
+                },
+            },
+        },
+    }
+    provider = _make_provider()
+    with patch("app.decision.provider.httpx.post",
+               return_value=_mock_response(body)):
+        result = provider.decide({}, [_noul_question()])
+
+    assert result.input_tokens == 10
+    assert result.billing_source == "free"
+    assert result.cost == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Test: cost guard
+# ---------------------------------------------------------------------------
+
+
+def test_paid_model_blocked_by_default():
+    """
+    A model name that does NOT end with '-free' must raise ValueError
+    unless ALLOW_PAID_JEV=true is set.
+    """
+    env = {**_env(), "JEV_MODEL": "jev-1.13-pro"}  # no '-free' suffix
+    with patch.dict("os.environ", env, clear=False):
+        with pytest.raises(ValueError, match="Paid models are blocked"):
+            JevProvider()
+
+
+def test_paid_model_allowed_with_flag():
+    """
+    ALLOW_PAID_JEV=true must let a paid model through without raising.
+    """
+    env = {**_env(), "JEV_MODEL": "jev-1.13-pro", "ALLOW_PAID_JEV": "true"}
+    with patch.dict("os.environ", env, clear=False):
+        provider = JevProvider()   # must not raise
+    assert provider._model == "jev-1.13-pro"
+
+
+def test_free_model_never_needs_flag():
+    """
+    A model ending with '-free' must always start without ALLOW_PAID_JEV.
+    """
+    env = {**_env(), "JEV_MODEL": "jev-1.13-free"}
+    # Ensure ALLOW_PAID_JEV is absent.
+    env.pop("ALLOW_PAID_JEV", None)
+    with patch.dict("os.environ", env, clear=False):
+        provider = JevProvider()   # must not raise
+    assert provider._model.endswith("-free")
+
+
+# ---------------------------------------------------------------------------
+# Test: cost > 0 produces a warning log
+# ---------------------------------------------------------------------------
+
+
+def test_cost_warning_logged_when_cost_positive(caplog: pytest.LogCaptureFixture):
+    """When the API reports cost > 0, a warning must appear in logs."""
+    body = {
+        "model": "jev-1.13-free",
+        "answers": {"needs_cache": {"type": "noul", "noul": 0.5}},
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cost": 0.42,          # non-zero cost
+            "opencode": {"billing_source": "paid"},
+        },
+    }
+    provider = _make_provider()
+    with patch("app.decision.provider.httpx.post",
+               return_value=_mock_response(body)):
+        with caplog.at_level(logging.WARNING, logger="app.decision.provider"):
+            result = provider.decide({}, [_noul_question()])
+
+    assert result.cost == pytest.approx(0.42)
+    assert result.billing_source == "paid"
+    # A warning must have been emitted.
+    assert any("cost" in r.message.lower() for r in caplog.records), \
+        "Expected a cost warning in logs"
+
+
+def test_no_secrets_in_logs_on_success(caplog: pytest.LogCaptureFixture):
+    """
+    On a successful parse, no state content, question text, response body
+    or key must appear in logs.
+    """
+    provider = _make_provider()
+    question = _noul_question()
+
+    with patch("app.decision.provider.httpx.post",
+               return_value=_mock_response(NOUL_RESPONSE)):
+        with caplog.at_level(logging.DEBUG, logger="app.decision.provider"):
+            provider.decide({"secret_state": "classified-data"}, [question])
+
+    log_text = caplog.text
+    assert FAKE_KEY not in log_text, "API key leaked"
+    assert "classified-data" not in log_text, "State content leaked"
+    assert "Does this need caching" not in log_text, "Question text leaked"
+    assert "secret_state" not in log_text, "State key leaked"
+

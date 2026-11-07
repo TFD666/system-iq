@@ -9,13 +9,16 @@ Auth:
 
 Response field assumptions (from https://docs.typesafe.ai/api/system-one):
     Noul  -> {"type":"noul", "noul": float}
-             noul = probability of "yes" (to be confirmed with a live check).
+             noul = probability of "yes" (confirmed: 0.97 in live probe).
     Choice-> {"type":"choice", "choice": str, "confidence": float,
               "probabilities": {option: float, ...}}
-             Assumed from docs examples – NOT yet confirmed with a live call.
+             Confirmed from live probe (eval/results/jev_choice_probe.json).
     Score -> {"type":"score", "score": float, "confidence": float,
               "legend": {"0": str, ...}, "probabilities": {"0": float, ...}}
-             Assumed from docs examples – NOT yet confirmed with a live call.
+             Assumed from docs – NOT yet confirmed with a live call.
+
+Usage block may contain extra keys (e.g. opencode.billing_source, cost).
+We read the ones we need and ignore the rest.
 """
 
 from __future__ import annotations
@@ -88,6 +91,10 @@ class DecisionResultSet(BaseModel):
     model: str
     input_tokens: int
     output_tokens: int
+    # Billing info read from usage.opencode.billing_source (None when absent).
+    billing_source: str | None = None
+    # Actual cost read from usage.cost (None when absent).
+    cost: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +161,11 @@ _TIMEOUT_SECONDS = 30
 _MAX_RETRIES_ON_SHORT_429 = 2  # retry at most twice for short retry-after
 _SHORT_RETRY_THRESHOLD = 60    # seconds – anything above this is "long"
 
+# Models that don't end with "-free" cost real money.
+# Block them unless the operator explicitly opts in.
+_FREE_MODEL_SUFFIX = "-free"
+_ALLOW_PAID_ENV = "ALLOW_PAID_JEV"
+
 
 class JevProvider(DecisionProvider):
     """Calls the Jev System One endpoint over HTTP (synchronous)."""
@@ -167,6 +179,16 @@ class JevProvider(DecisionProvider):
             raise ValueError(
                 "OPENCODE_API_KEY must be set in the environment"
             )
+
+        # Cost guard: refuse to start with a paid model unless explicitly allowed.
+        if not self._model.endswith(_FREE_MODEL_SUFFIX):
+            allow_paid = os.environ.get(_ALLOW_PAID_ENV, "").lower()
+            if allow_paid != "true":
+                raise ValueError(
+                    f"JEV_MODEL '{self._model}' does not end with '-free'. "
+                    "Paid models are blocked by default. "
+                    f"Set {_ALLOW_PAID_ENV}=true to allow paid model usage."
+                )
 
     # -- public interface ---------------------------------------------------
 
@@ -335,6 +357,9 @@ class JevProvider(DecisionProvider):
         - every question id has an answer
         - answer type matches question kind
         - probabilities are in 0..1
+
+        The usage block may contain extra vendor keys (e.g. opencode.*).
+        We only read the fields we know about; unknown keys are ignored.
         """
         if not isinstance(body, dict):
             raise DecisionFormatError("Response is not a JSON object")
@@ -343,7 +368,40 @@ class JevProvider(DecisionProvider):
         if not isinstance(answers_raw, dict):
             raise DecisionFormatError("Response missing 'answers' dict")
 
-        usage = body.get("usage", {})
+        # answers_raw is keyed by question id; order may differ from question list.
+        usage = body.get("usage", {}) if isinstance(body.get("usage"), dict) else {}
+
+        # Read the top-level token counts (always present in valid responses).
+        input_tokens: int = usage.get("input_tokens", 0)
+        output_tokens: int = usage.get("output_tokens", 0)
+
+        # Read optional cost and billing_source; ignore if absent or wrong type.
+        raw_cost = usage.get("cost")
+        cost: float | None = float(raw_cost) if raw_cost is not None else None
+
+        # billing_source lives one level deeper: usage.opencode.billing_source
+        opencode_block = usage.get("opencode", {})
+        billing_source: str | None = None
+        if isinstance(opencode_block, dict):
+            bs = opencode_block.get("billing_source")
+            billing_source = str(bs) if bs is not None else None
+
+        # Warn if money was spent or the billing source is not "free".
+        if (cost is not None and cost > 0) or (
+            billing_source is not None and billing_source != "free"
+        ):
+            logger.warning(
+                "Jev response indicates potential cost: cost=%s billing_source=%s",
+                cost,
+                billing_source,
+            )
+
+        # Log token counts only – safe to log.
+        logger.debug(
+            "Jev usage: input_tokens=%d output_tokens=%d",
+            input_tokens,
+            output_tokens,
+        )
 
         decisions: dict[str, Decision] = {}
         for q in questions:
@@ -360,18 +418,13 @@ class JevProvider(DecisionProvider):
                 )
             decisions[q.id] = self._parse_answer(q, raw)
 
-        # Log token counts only – safe to log.
-        logger.debug(
-            "Jev usage: input_tokens=%d output_tokens=%d",
-            usage.get("input_tokens", 0),
-            usage.get("output_tokens", 0),
-        )
-
         return DecisionResultSet(
             decisions=decisions,
             model=body.get("model", self._model),
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            billing_source=billing_source,
+            cost=cost,
         )
 
     def _parse_answer(
@@ -399,7 +452,7 @@ class JevProvider(DecisionProvider):
         """Parse a noul answer.
 
         Docs shape:  {"type": "noul", "noul": 0.98}
-        noul = probability of "yes" (to be confirmed with a live check).
+        noul = probability of "yes" (confirmed with live probe).
         """
         noul_value = raw.get("noul")
         if noul_value is None:
@@ -424,15 +477,16 @@ class JevProvider(DecisionProvider):
     ) -> Decision:
         """Parse a choice answer.
 
-        Docs shape (assumed, not yet confirmed with a live call):
+        Confirmed live shape (from eval/results/jev_choice_probe.json):
             {
                 "type": "choice",
-                "choice": "calm",        # the winning option name
-                "confidence": 0.7,       # 0..1
-                "probabilities": {       # one entry per criterion
-                    "angry": 0.15,
-                    "calm": 0.8,
-                    "excited": 0.05
+                "choice": "PostgreSQL + PostGIS",   # winning option
+                "confidence": 0.96,                 # 0..1
+                "probabilities": {                  # one entry per criterion
+                    "PostgreSQL": 0,
+                    "DynamoDB": 0.01,
+                    "MongoDB": 0.02,
+                    "PostgreSQL + PostGIS": 0.97
                 }
             }
         """
@@ -565,9 +619,13 @@ class FakeDecisionProvider(DecisionProvider):
         self,
         canned: dict[str, Decision] | None = None,
         model: str = "fake-model",
+        billing_source: str | None = None,
+        cost: float | None = None,
     ) -> None:
         self._canned = canned or {}
         self._model = model
+        self._billing_source = billing_source
+        self._cost = cost
 
     def decide(
         self,
@@ -590,4 +648,6 @@ class FakeDecisionProvider(DecisionProvider):
             model=self._model,
             input_tokens=0,
             output_tokens=0,
+            billing_source=self._billing_source,
+            cost=self._cost,
         )

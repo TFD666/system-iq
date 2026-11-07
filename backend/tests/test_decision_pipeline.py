@@ -423,9 +423,17 @@ class TestDesignEndpoint:
         body = client.post("/design", json={"idea": "Build a chat app"}).json()
         for dec in body["decisions"]:
             assert "id" in dec
+            assert "question" in dec
             assert "status" in dec
             assert "probability" in dec
             assert "based_on_unknowns" in dec
+
+    def test_every_decision_has_non_empty_question(self):
+        # Each decision must carry a non-empty fixed template sentence.
+        client = _make_client()
+        body = client.post("/design", json={"idea": "Build a chat app"}).json()
+        for dec in body["decisions"]:
+            assert dec["question"], f"Decision '{dec['id']}' has an empty question"
 
     def test_fake_mode_meta_model_label(self):
         # When FakeDecisionProvider is used, meta.decision_model must be the fake label.
