@@ -1,0 +1,124 @@
+﻿{
+  "stage": "decided",
+  "requirements": {
+    "project_summary": "A mobile application designed to help users discover bars located in their immediate vicinity.",
+    "app_type": "mobile",
+    "core_features": [
+      "Display list of nearby bars",
+      "View details of specific bars",
+      "Show location of bars on a map"
+    ],
+    "user_roles": [
+      "User"
+    ],
+    "expected_scale": {
+      "users": null,
+      "peak_requests_per_second": null,
+      "data_volume": null
+    },
+    "realtime": false,
+    "geospatial": true,
+    "authentication": null,
+    "search_filtering": null,
+    "media_storage": null,
+    "payments": null,
+    "offline_support": null,
+    "external_integrations": [
+      "map provider",
+      "poi database"
+    ],
+    "constraints": [],
+    "assumptions": [
+      "User location is accessed via device GPS",
+      "Bar data includes name and address",
+      "Information is statically derived from external sources rather than user-generated"
+    ],
+    "unknowns": [
+      "authentication not specified",
+      "search_filtering not specified",
+      "media_storage not specified",
+      "payments not specified",
+      "offline_support not specified",
+      "expected scale not specified",
+      "Whether users can filter by specific bar attributes (e.g., happy hour, price range)",
+      "If the app includes social features or user reviews"
+    ],
+    "evidence": {
+      "app_type": "app to find nearby bars",
+      "geospatial": "find nearby bars",
+      "realtime": "app to find nearby bars"
+    }
+  },
+  "decisions": [
+    {
+      "id": "api_style",
+      "question": "Which API communication style best fits this project's needs?",
+      "status": "needs_review",
+      "choice": null,
+      "probability": 0.0,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "primary_database",
+      "question": "Which database best suits the data storage needs of this project?",
+      "status": "needs_review",
+      "choice": null,
+      "probability": 0.0,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "architecture_style",
+      "question": "Which architecture style is most appropriate for this project's scale?",
+      "status": "needs_review",
+      "choice": null,
+      "probability": 0.0,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "cache_needed",
+      "question": "Does this project need a caching layer to meet its performance requirements?",
+      "status": "uncertain",
+      "choice": null,
+      "probability": 0.5,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "async_processing_needed",
+      "question": "Does this project need asynchronous or background job processing?",
+      "status": "uncertain",
+      "choice": null,
+      "probability": 0.5,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "horizontal_scaling_needed",
+      "question": "Does this project need horizontal scaling to handle its expected load?",
+      "status": "uncertain",
+      "choice": null,
+      "probability": 0.5,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "auth_approach",
+      "question": "Which authentication approach is most appropriate for this project?",
+      "status": "needs_review",
+      "choice": null,
+      "probability": 0.0,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    }
+  ],
+  "meta": {
+    "decision_model": "fake (demo only)",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "decision_billing": null,
+    "decision_cost": null
+  }
+}

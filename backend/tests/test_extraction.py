@@ -3,6 +3,8 @@ Tests for extraction.py.
 All tests use FakeProvider — no real network calls.
 """
 import json
+import logging
+
 import pytest
 
 from app.extraction import (
@@ -41,6 +43,13 @@ VALID_JSON = json.dumps({
     "constraints": [],
     "assumptions": ["Single-user initially"],
     "unknowns": ["target platform"],
+    # Only app_type is grounded here; the booleans are left without evidence
+    # on purpose so the evidence check drops them (see the evidence tests
+    # below) rather than keeping stale True/False fixture values unverified.
+    # The quote includes "web" because the keyword heuristic now requires a
+    # web/mobile/api word to back a non-"other" app_type, not just any
+    # substring of the idea.
+    "evidence": {"app_type": "to-do web app"},
 })
 
 # A second fixture where booleans are null, app_type is null, and all scale is null.
@@ -93,8 +102,9 @@ def make_result(text: str, prompt_tokens: int = 10, completion_tokens: int = 20)
 
 def test_valid_json_returns_requirements_object():
     # Happy path: first call returns good JSON → Requirements comes back
+    # Idea must contain "web" so the evidence quote's keyword check passes.
     provider = SequentialFakeProvider([make_result(VALID_JSON)])
-    result = extract_requirements("build a to-do app", provider)
+    result = extract_requirements("build a to-do web app", provider)
     assert isinstance(result, Requirements)
     assert result.app_type == "web"
 
@@ -149,7 +159,7 @@ def test_wrong_app_type_string_fails_validation_triggers_retry_then_succeeds():
         make_result(bad_type),
         make_result(VALID_JSON),
     ])
-    result = extract_requirements("build a to-do app", provider)
+    result = extract_requirements("build a to-do web app", provider)
     assert result.app_type == "web"
 
 
@@ -331,11 +341,14 @@ def test_extract_requirements_merges_without_duplicates():
 
 def test_extract_requirements_llm_unknowns_preserved_after_merge():
     # Extra unknowns from the LLM (not covered by deterministic entries) must survive
+    # Idea needs a realtime keyword ("live") so the grounded True survives
+    # the keyword heuristic, not just the plain substring check.
     llm_json = json.loads(NULL_BOOLEANS_JSON)
     llm_json["realtime"] = True       # stated → no deterministic entry for realtime
+    llm_json["evidence"] = {"realtime": "live updates"}  # grounds the True value
     llm_json["unknowns"] = ["target audience"]
     provider = SequentialFakeProvider([make_result(json.dumps(llm_json))])
-    result = extract_requirements("vague idea", provider)
+    result = extract_requirements("a vague idea with live updates", provider)
 
     assert "target audience" in result.unknowns
     assert "realtime not specified" not in result.unknowns
@@ -398,3 +411,296 @@ def test_system_prompt_contains_core_features_rule():
 
 def test_system_prompt_contains_external_integrations_rule():
     assert "external_integrations lists only services" in SYSTEM_PROMPT
+
+
+def test_system_prompt_contains_evidence_rule():
+    # The new evidence-grounding rule must be present and must require a
+    # verbatim (never paraphrased) quote.
+    assert "evidence" in SYSTEM_PROMPT
+    assert "verbatim quote" in SYSTEM_PROMPT
+    assert "never paraphrased" in SYSTEM_PROMPT
+
+
+# ── evidence-grounded extraction ───────────────────────────────────────────────
+# Reproduces the "nearby bars" bug: a boolean/app_type claim with no quote
+# backing it in the idea text must be dropped to None, never trusted as-is.
+
+def _null_booleans_with(**overrides) -> str:
+    data = json.loads(NULL_BOOLEANS_JSON)
+    data.update(overrides)
+    return json.dumps(data)
+
+
+def test_evidence_valid_quote_keeps_the_value():
+    idea = "An app to find nearby bars. Users must log in with a password."
+    llm_json = _null_booleans_with(
+        authentication=True,
+        evidence={"authentication": "log in with a password"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is True
+    assert "authentication not specified" not in result.unknowns
+
+
+def test_evidence_missing_quote_drops_value_and_adds_unknown():
+    # authentication=True with no evidence entry at all — this is exactly the
+    # "nearby bars" bug: an ungrounded claim must not survive.
+    idea = "An app to find nearby bars."
+    llm_json = _null_booleans_with(authentication=True)
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is None
+    assert "authentication not specified" in result.unknowns
+    assert "authentication" not in result.evidence
+
+
+def test_evidence_quote_not_found_in_idea_drops_value():
+    idea = "An app to find nearby bars."
+    llm_json = _null_booleans_with(
+        authentication=True,
+        evidence={"authentication": "log in with a password"},  # not in idea
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is None
+    assert "authentication not specified" in result.unknowns
+
+
+def test_evidence_quote_case_and_whitespace_differences_are_accepted():
+    idea = "An app to find nearby bars.  Users must   LOG IN   with a password."
+    llm_json = _null_booleans_with(
+        authentication=True,
+        evidence={"authentication": "log in with a password"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is True
+
+
+def test_evidence_app_type_dropped_without_matching_quote():
+    idea = "An app to find nearby bars."
+    llm_json = _null_booleans_with(app_type="mobile")
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.app_type is None
+    assert "app_type not specified" in result.unknowns
+
+
+def test_evidence_app_type_kept_with_matching_quote():
+    # "built for phones" has no mobile/web/api keyword, so this now needs a
+    # quote containing one (e.g. "mobile") to pass the keyword heuristic.
+    idea = "An app to find nearby bars, built for mobile phones."
+    llm_json = _null_booleans_with(
+        app_type="mobile",
+        evidence={"app_type": "built for mobile phones"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.app_type == "mobile"
+    assert "app_type not specified" not in result.unknowns
+
+
+def test_evidence_check_never_logs_idea_text(caplog):
+    # A field is dropped (triggering the evidence-check log line); the idea
+    # text itself, including anything sensitive in it, must never appear.
+    idea = "my secret idea with sk-abcdefghijklmnopqrstuvwxyz1234"
+    llm_json = _null_booleans_with(authentication=True)  # no evidence → dropped
+    provider = SequentialFakeProvider([make_result(llm_json)])
+
+    with caplog.at_level(logging.INFO):
+        result = extract_requirements(idea, provider)
+
+    assert result.authentication is None
+    assert any("authentication" in r.getMessage() for r in caplog.records)
+    for record in caplog.records:
+        assert idea not in record.getMessage()
+
+
+# ── evidence keyword/negation heuristic ────────────────────────────────────────
+# Tightens the plain substring check above: a quote that is merely *in* the
+# idea (even the whole idea sentence) must also carry a field-relevant
+# keyword (TRUE) or a negation word (FALSE) to be trusted.
+
+def test_evidence_whole_idea_quote_without_keyword_is_dropped():
+    # Quoting the entire idea passes the old substring check but contains no
+    # authentication-related keyword, so it must not ground the claim.
+    idea = "An app to find nearby bars"
+    llm_json = _null_booleans_with(
+        authentication=True,
+        evidence={"authentication": idea},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is None
+    assert "authentication not specified" in result.unknowns
+
+
+def test_evidence_true_with_relevant_keyword_is_kept():
+    idea = "An app to find nearby bars. Users must sign up for an account."
+    llm_json = _null_booleans_with(
+        authentication=True,
+        evidence={"authentication": "sign up for an account"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is True
+
+
+def test_evidence_false_without_negation_is_dropped():
+    # Quote is real and about payments, but has no negation word, so a FALSE
+    # claim still cannot be trusted.
+    idea = "An app to find nearby bars with payment info shown sometimes."
+    llm_json = _null_booleans_with(
+        payments=False,
+        evidence={"payments": "payment info shown sometimes"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.payments is None
+    assert "payments not specified" in result.unknowns
+
+
+def test_evidence_false_with_no_login_is_kept():
+    idea = "An app to find nearby bars. There is no login required."
+    llm_json = _null_booleans_with(
+        authentication=False,
+        evidence={"authentication": "no login required"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is False
+
+
+def test_evidence_false_with_contraction_negation_is_kept():
+    idea = "An app to find nearby bars. It doesn't need offline support."
+    llm_json = _null_booleans_with(
+        offline_support=False,
+        evidence={"offline_support": "doesn't need offline support"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.offline_support is False
+
+
+def test_evidence_app_type_mobile_from_bare_app_word_is_dropped():
+    # "app" alone is explicitly not evidence for any app_type.
+    idea = "A bars finder app."
+    llm_json = _null_booleans_with(app_type="mobile", evidence={"app_type": "app"})
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.app_type is None
+
+
+def test_evidence_app_type_mobile_from_mobile_app_is_kept():
+    idea = "A bars finder mobile app."
+    llm_json = _null_booleans_with(app_type="mobile", evidence={"app_type": "mobile app"})
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.app_type == "mobile"
+
+
+def test_evidence_app_type_both_needs_two_words_one_is_not_enough():
+    idea = "An app to find nearby bars, available on the web and as an iphone app."
+    llm_json = _null_booleans_with(
+        app_type="both",
+        evidence={"app_type": "available on the web"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.app_type is None
+
+
+def test_evidence_app_type_both_kept_with_mobile_and_web_words():
+    idea = "An app to find nearby bars, available on the web and as an iphone app."
+    llm_json = _null_booleans_with(
+        app_type="both",
+        evidence={"app_type": "available on the web and as an iphone app"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.app_type == "both"
+
+
+def test_evidence_app_type_both_kept_with_cross_platform_word():
+    idea = "An app to find nearby bars, built cross-platform."
+    llm_json = _null_booleans_with(
+        app_type="both",
+        evidence={"app_type": "built cross-platform"},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.app_type == "both"
+
+
+# ── LLM-written unknowns: contradiction filtering + cap ────────────────────────
+
+def test_llm_unknown_contradicting_still_unresolved_field_is_filtered():
+    # authentication=True is dropped for lack of evidence, so the
+    # deterministic "authentication not specified" is added; a same-topic
+    # LLM unknown saying the same thing in different words is redundant.
+    idea = "An app to find nearby bars."
+    llm_json = _null_booleans_with(
+        authentication=True,  # no evidence → dropped
+        unknowns=["no login flow mentioned", "something unrelated"],
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert "authentication not specified" in result.unknowns
+    assert "no login flow mentioned" not in result.unknowns
+    assert "something unrelated" in result.unknowns
+
+
+def test_llm_unknown_contradicting_resolved_field_is_filtered():
+    idea = "An app to find nearby bars. Users must log in with a password."
+    llm_json = _null_booleans_with(
+        authentication=True,
+        evidence={"authentication": "log in with a password"},
+        unknowns=["login method not specified", "something unrelated"],
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    assert result.authentication is True
+    assert "login method not specified" not in result.unknowns
+    assert "something unrelated" in result.unknowns
+
+
+def test_llm_unknowns_capped_at_three():
+    idea = "A vague app idea."
+    llm_json = _null_booleans_with(unknowns=["one", "two", "three", "four", "five"])
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    kept = [u for u in result.unknowns if u in {"one", "two", "three", "four", "five"}]
+    assert kept == ["one", "two", "three"]
+
+
+def test_llm_unknown_truncated_to_100_chars():
+    idea = "A vague app idea."
+    long_unknown = "x" * 150
+    llm_json = _null_booleans_with(unknowns=[long_unknown])
+    provider = SequentialFakeProvider([make_result(llm_json)])
+    result = extract_requirements(idea, provider)
+    truncated = [u for u in result.unknowns if u.startswith("x")]
+    assert len(truncated) == 1
+    assert len(truncated[0]) == 100
+
+
+def test_evidence_check_does_not_log_quote_text(caplog):
+    # The dropped-field log line must name only the field, never the quote
+    # or idea text, even when the quote was close but failed the keyword
+    # heuristic.
+    idea = "An app to find nearby bars."
+    distinctive_quote = "zzz-distinctive-quote-zzz nearby bars"
+    llm_json = _null_booleans_with(
+        authentication=True,
+        evidence={"authentication": distinctive_quote},
+    )
+    provider = SequentialFakeProvider([make_result(llm_json)])
+
+    with caplog.at_level(logging.INFO):
+        result = extract_requirements(idea, provider)
+
+    assert result.authentication is None
+    for record in caplog.records:
+        assert "zzz-distinctive-quote-zzz" not in record.getMessage()
+        assert idea not in record.getMessage()

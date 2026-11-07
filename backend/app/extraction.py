@@ -1,10 +1,13 @@
 import json
+import logging
 import re
 
 from pydantic import ValidationError
 
 from .llm import LLMProvider, LLMResult
-from .schemas import Requirements, TRISTATE_BOOL_FIELDS
+from .schemas import EVIDENCE_FIELDS, Requirements, TRISTATE_BOOL_FIELDS
+
+logger = logging.getLogger(__name__)
 
 # ── custom error ───────────────────────────────────────────────────────────────
 
@@ -39,6 +42,12 @@ Rules:
   false = input says it is not needed or it is clearly absent,
   null = input does not address it at all.
   Use null (not false) when the input simply does not mention the feature.
+- For every non-null boolean flag and for app_type when not null, add an
+  entry to "evidence" keyed by that field's name, whose value is an exact,
+  verbatim quote copied from the idea text (max 120 characters). The quote
+  must be copied character-for-character from the idea, never paraphrased
+  or invented. If you cannot quote the idea to support the value, output
+  null for that field instead and add no evidence entry for it.
 - Do NOT list boolean, scale, or app_type unknowns in "unknowns" yourself;
   the system will add those automatically. Use "unknowns" only for other
   missing context not already covered by the boolean/scale/app_type fields.
@@ -64,9 +73,115 @@ Required JSON schema:
   "external_integrations": ["string"],
   "constraints": ["string"],
   "assumptions": ["string"],
-  "unknowns": ["string"]
+  "unknowns": ["string"],
+  "evidence": {
+    "<field name>": "verbatim quote from the idea supporting that field's value"
+  }
 }
 """
+
+
+# ── evidence keyword heuristic ────────────────────────────────────────────────
+# Deterministic, hand-picked keyword lists used to sanity-check evidence
+# quotes (see _enforce_evidence below). This is a heuristic, not NLP: it
+# only rejects quotes that plainly don't mention the field at all (e.g. the
+# whole idea sentence copied as "evidence" for every field).
+
+GEOSPATIAL_KEYWORDS = (
+    "near", "nearby", "nearest", "location", "map", "gps", "distance",
+    "radius", "around me", "local",
+)
+AUTHENTICATION_KEYWORDS = (
+    "login", "log in", "sign in", "sign up", "signup", "account",
+    "accounts", "password", "register", "auth",
+)
+REALTIME_KEYWORDS = (
+    "real-time", "real time", "realtime", "live", "instant", "chat",
+    "push notification",
+)
+SEARCH_FILTERING_KEYWORDS = ("search", "filter", "sort", "browse", "find")
+MEDIA_STORAGE_KEYWORDS = (
+    "photo", "image", "video", "upload", "file", "picture", "media",
+)
+PAYMENTS_KEYWORDS = (
+    "pay", "payment", "checkout", "purchase", "subscription", "billing",
+    "price", "buy",
+)
+OFFLINE_SUPPORT_KEYWORDS = ("offline", "without internet", "no internet")
+
+MOBILE_KEYWORDS = ("mobile", "ios", "android", "iphone")
+WEB_KEYWORDS = ("web", "website", "browser")
+API_KEYWORDS = ("api", "backend", "endpoint")
+CROSS_PLATFORM_KEYWORDS = ("cross-platform",)
+
+# Keywords a TRUE boolean value needs in its evidence quote, per field.
+FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "geospatial": GEOSPATIAL_KEYWORDS,
+    "authentication": AUTHENTICATION_KEYWORDS,
+    "realtime": REALTIME_KEYWORDS,
+    "search_filtering": SEARCH_FILTERING_KEYWORDS,
+    "media_storage": MEDIA_STORAGE_KEYWORDS,
+    "payments": PAYMENTS_KEYWORDS,
+    "offline_support": OFFLINE_SUPPORT_KEYWORDS,
+    # Used only for filtering contradicting LLM unknowns (see
+    # _filter_llm_unknowns); app_type's own TRUE check is in
+    # _passes_app_type_keyword_check below.
+    "app_type": MOBILE_KEYWORDS + WEB_KEYWORDS + API_KEYWORDS + CROSS_PLATFORM_KEYWORDS,
+}
+
+# A word ending in "n't" (isn't, doesn't, won't, ...) also counts as negation.
+NEGATION_KEYWORDS = ("no", "not", "without", "never", "none", "neither", "nor")
+_NEGATION_SUFFIX_RE = re.compile(r"n't\b")
+
+# Cap + per-item length for LLM-written (non-deterministic) unknowns.
+MAX_LLM_UNKNOWNS = 3
+MAX_LLM_UNKNOWN_LEN = 100
+
+
+def _contains_keyword(text_norm: str, keywords: tuple[str, ...]) -> bool:
+    """Word-boundary, case-insensitive search for any keyword in text_norm.
+
+    text_norm must already be lowercased/whitespace-collapsed
+    (see _normalize_for_match), which is also what makes the multi-word
+    keywords (e.g. "log in") match on exact single-space boundaries.
+    """
+    return any(re.search(rf"\b{re.escape(kw)}\b", text_norm) for kw in keywords)
+
+
+def _has_negation(quote_norm: str) -> bool:
+    return (
+        _contains_keyword(quote_norm, NEGATION_KEYWORDS)
+        or bool(_NEGATION_SUFFIX_RE.search(quote_norm))
+    )
+
+
+def _passes_app_type_keyword_check(value: str, quote_norm: str) -> bool:
+    if value == "other":
+        return True
+    if value == "mobile":
+        return _contains_keyword(quote_norm, MOBILE_KEYWORDS)
+    if value == "web":
+        return _contains_keyword(quote_norm, WEB_KEYWORDS)
+    if value == "api":
+        return _contains_keyword(quote_norm, API_KEYWORDS)
+    if value == "both":
+        if _contains_keyword(quote_norm, CROSS_PLATFORM_KEYWORDS):
+            return True
+        return _contains_keyword(quote_norm, MOBILE_KEYWORDS) and _contains_keyword(
+            quote_norm, WEB_KEYWORDS
+        )
+    return True
+
+
+def _passes_keyword_check(field_name: str, value, quote_norm: str) -> bool:
+    """Apply the TRUE-needs-keyword / FALSE-needs-negation heuristic."""
+    if field_name == "app_type":
+        return _passes_app_type_keyword_check(value, quote_norm)
+    if value is True:
+        return _contains_keyword(quote_norm, FIELD_KEYWORDS[field_name])
+    if value is False:
+        return _has_negation(quote_norm)
+    return True
 
 
 def _user_message(idea: str) -> str:
@@ -129,6 +244,75 @@ def _build_deterministic_unknowns(req: Requirements) -> list[str]:
     return entries
 
 
+def _normalize_for_match(text: str) -> str:
+    """Lowercase and collapse whitespace so quote matching ignores case/spacing."""
+    return " ".join(text.split()).lower()
+
+
+def _enforce_evidence(req: Requirements, idea: str) -> Requirements:
+    """
+    Drop any non-null app_type/boolean value whose evidence quote is missing,
+    does not actually occur in the idea text (case/whitespace-insensitive
+    substring match), or does not pass the keyword heuristic (TRUE needs a
+    relevant keyword, FALSE needs a negation word; see _passes_keyword_check).
+    This never triggers an LLM retry; it only corrects the parsed object in
+    place. Only the dropped field names are logged, never the idea text or
+    the quotes themselves.
+    """
+    idea_norm = _normalize_for_match(idea)
+    dropped: list[str] = []
+
+    for field_name in EVIDENCE_FIELDS:
+        value = getattr(req, field_name)
+        if value is None:
+            continue
+        quote = req.evidence.get(field_name)
+        quote_norm = _normalize_for_match(quote) if quote else ""
+        grounded = bool(quote) and quote_norm in idea_norm
+        if grounded and not _passes_keyword_check(field_name, value, quote_norm):
+            grounded = False
+        if not grounded:
+            setattr(req, field_name, None)
+            req.evidence.pop(field_name, None)
+            dropped.append(field_name)
+
+    if dropped:
+        logger.info("evidence check dropped ungrounded fields: %s", dropped)
+
+    return req
+
+
+def _filter_llm_unknowns(
+    llm_unknowns: list[str], deterministic: list[str], req: Requirements
+) -> list[str]:
+    """
+    Drop any LLM-written unknown that contradicts a field the deterministic
+    pass already settled: either still-unknown (listed in `deterministic`)
+    or now resolved (non-null after the evidence check). Then cap the
+    remaining list at MAX_LLM_UNKNOWNS entries, each truncated to
+    MAX_LLM_UNKNOWN_LEN characters.
+    """
+    unresolved_fields = {entry.rsplit(" not specified", 1)[0] for entry in deterministic}
+    resolved_fields = {
+        field_name for field_name in EVIDENCE_FIELDS if getattr(req, field_name) is not None
+    }
+    contested_keywords = [
+        keyword
+        for field_name in unresolved_fields | resolved_fields
+        for keyword in FIELD_KEYWORDS.get(field_name, ())
+    ]
+
+    kept: list[str] = []
+    for item in llm_unknowns:
+        if _contains_keyword(_normalize_for_match(item), tuple(contested_keywords)):
+            continue
+        kept.append(item.strip()[:MAX_LLM_UNKNOWN_LEN])
+        if len(kept) == MAX_LLM_UNKNOWNS:
+            break
+
+    return kept
+
+
 def _merge_unknowns(deterministic: list[str], llm_written: list[str]) -> list[str]:
     """
     Combine the deterministic entries with whatever the LLM added, keeping
@@ -146,17 +330,22 @@ def _merge_unknowns(deterministic: list[str], llm_written: list[str]) -> list[st
     return merged
 
 
-def _parse_and_validate(text: str) -> Requirements:
+def _parse_and_validate(text: str, idea: str) -> Requirements:
     """Try to parse the model output as a Requirements object."""
     clean = _strip_think_tags(text)
     clean = _strip_fences(clean)
     data = json.loads(clean)          # raises json.JSONDecodeError on bad JSON
     req = Requirements(**data)        # raises ValidationError on schema mismatch
 
+    # Drop any app_type/boolean value the model couldn't ground in the idea.
+    req = _enforce_evidence(req, idea)
+
     # Replace the LLM-written unknowns with a merged, deduplicated list
-    # where the deterministic entries always come first.
+    # where the deterministic entries always come first. Runs after the
+    # evidence check so a dropped field is recorded as unknown too.
     deterministic = _build_deterministic_unknowns(req)
-    req.unknowns = _merge_unknowns(deterministic, req.unknowns)
+    llm_unknowns = _filter_llm_unknowns(req.unknowns, deterministic, req)
+    req.unknowns = _merge_unknowns(deterministic, llm_unknowns)
 
     return req
 
@@ -181,7 +370,7 @@ def extract_requirements(idea: str, provider: LLMProvider) -> Requirements:
     )
 
     try:
-        return _parse_and_validate(result.text)
+        return _parse_and_validate(result.text, idea)
     except (json.JSONDecodeError, ValidationError, KeyError, TypeError) as first_err:
         # Only the structural error type is forwarded — never the idea text or model output
         error_summary = str(first_err)
@@ -194,7 +383,7 @@ def extract_requirements(idea: str, provider: LLMProvider) -> Requirements:
     )
 
     try:
-        return _parse_and_validate(result.text)
+        return _parse_and_validate(result.text, idea)
     except (json.JSONDecodeError, ValidationError, KeyError, TypeError) as second_err:
         # Include only the error type class name, not the full message, to avoid
         # leaking any model output into exception strings that callers might log.

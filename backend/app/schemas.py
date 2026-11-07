@@ -21,6 +21,13 @@ TRISTATE_BOOL_FIELDS = (
     "offline_support",
 )
 
+# Fields whose non-null value must be backed by a verbatim quote from the idea
+# text in "evidence" (see extraction._enforce_evidence).
+EVIDENCE_FIELDS = ("app_type",) + TRISTATE_BOOL_FIELDS
+
+# Longest evidence quote we keep; longer values are truncated, never rejected.
+_EVIDENCE_QUOTE_MAX_LEN = 120
+
 
 class DesignRequest(BaseModel):
     # The raw project idea from the user
@@ -70,6 +77,25 @@ class Requirements(BaseModel):
     constraints: list[str]
     assumptions: list[str]   # things inferred but not stated
     unknowns: list[str]      # things missing that we cannot guess
+
+    # Verbatim idea quotes supporting each non-null field in EVIDENCE_FIELDS.
+    # Only fields that pass the evidence check (extraction.py) keep an entry.
+    evidence: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def normalise_evidence(cls, value):
+        """
+        Keep only entries keyed by an EVIDENCE_FIELDS name with a non-empty
+        string value, truncated to _EVIDENCE_QUOTE_MAX_LEN characters.
+        """
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: val.strip()[:_EVIDENCE_QUOTE_MAX_LEN]
+            for key, val in value.items()
+            if key in EVIDENCE_FIELDS and isinstance(val, str) and val.strip()
+        }
 
     @field_validator(*TRISTATE_BOOL_FIELDS, mode="before")
     @classmethod
