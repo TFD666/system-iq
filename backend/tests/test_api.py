@@ -15,12 +15,18 @@ from app.extraction import ExtractionError
 from app.llm import (
     GROQ_API_URL,
     MAX_RATE_LIMIT_RETRIES,
+    GroqAuthError,
     LLMProvider,
     LLMResult,
     GroqProvider,
     RateLimitError,
 )
-from app.decision.provider import FakeDecisionProvider
+from app.decision.provider import (
+    DecisionAuthError,
+    DecisionProvider,
+    DecisionResultSet,
+    FakeDecisionProvider,
+)
 from app.main import app, get_provider, get_decision_provider
 
 # ── shared fixture data ────────────────────────────────────────────────────────
@@ -70,6 +76,18 @@ class RateLimitProvider(LLMProvider):
         raise RateLimitError("Groq rate limit hit and retries exhausted.")
 
 
+class GroqAuthFailProvider(LLMProvider):
+    """Always raises GroqAuthError (simulates a rejected Groq API key)."""
+    def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        raise GroqAuthError("Groq rejected the API key (HTTP 401)")
+
+
+class AuthFailDecisionProvider(DecisionProvider):
+    """Always raises DecisionAuthError (simulates a rejected Jev API key)."""
+    def decide(self, state, questions) -> DecisionResultSet:
+        raise DecisionAuthError("Decision service rejected the API key (HTTP 401)")
+
+
 # ── TestClient factory ─────────────────────────────────────────────────────────
 
 def make_client(provider: LLMProvider) -> TestClient:
@@ -80,6 +98,31 @@ def make_client(provider: LLMProvider) -> TestClient:
     """
     app.dependency_overrides[get_provider] = lambda: provider
     app.dependency_overrides[get_decision_provider] = lambda: FakeDecisionProvider()
+    return TestClient(app)
+
+
+def make_client_with_decision(provider: LLMProvider, decision_provider: DecisionProvider) -> TestClient:
+    """Like make_client, but lets the test pick the decision provider too."""
+    app.dependency_overrides[get_provider] = lambda: provider
+    app.dependency_overrides[get_decision_provider] = lambda: decision_provider
+    return TestClient(app)
+
+
+def make_client_real_decision(provider: LLMProvider) -> TestClient:
+    """
+    Override only the LLM provider; get_decision_provider runs for real so a
+    JevProvider construction error (missing key, paid-model guard) surfaces.
+    """
+    app.dependency_overrides[get_provider] = lambda: provider
+    return TestClient(app)
+
+
+def make_client_real_llm(decision_provider: DecisionProvider) -> TestClient:
+    """
+    Override only the decision provider; get_provider runs for real so a
+    GroqProvider construction error (missing key) surfaces.
+    """
+    app.dependency_overrides[get_decision_provider] = lambda: decision_provider
     return TestClient(app)
 
 
@@ -131,6 +174,69 @@ def test_rate_limit_error_returns_429():
     response = client.post("/design", json={"idea": "Build something"})
     assert response.status_code == 429
     assert "wait" in response.json()["detail"].lower()
+
+
+# ── auth / misconfiguration error mapping ───────────────────────────────────────
+# Reproduces the bug: a rejected Jev API key used to surface as
+# DecisionUnavailableError -> HTTP 504, which the CLI prints as "backend
+# timed out talking to the model" -- hiding a bad key behind a timeout.
+
+def test_decision_auth_error_returns_502_with_detail():
+    client = make_client_with_decision(AlwaysGoodProvider(), AuthFailDecisionProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "OPENCODE_API_KEY" in detail
+
+
+def test_groq_auth_error_returns_502_with_detail():
+    client = make_client(GroqAuthFailProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "GROQ_API_KEY" in detail
+
+
+def test_missing_decision_api_key_returns_503(monkeypatch):
+    # No override for get_decision_provider: JevProvider() construction runs
+    # for real and raises ValueError for the missing key, which must become
+    # a clean 503, not an unhandled 500 with a stack trace.
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    monkeypatch.setenv("DECISION_PROVIDER", "jev")
+    client = make_client_real_decision(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "misconfigured" in detail
+    assert "OPENCODE_API_KEY" in detail
+    assert "Traceback" not in response.text
+
+
+def test_paid_model_guard_returns_503_with_detail(monkeypatch):
+    monkeypatch.setenv("OPENCODE_API_KEY", "fake-key-for-tests")
+    monkeypatch.setenv("JEV_MODEL", "jev-1.13-pro")  # not "-free"
+    monkeypatch.delenv("ALLOW_PAID_JEV", raising=False)
+    monkeypatch.setenv("DECISION_PROVIDER", "jev")
+    client = make_client_real_decision(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "misconfigured" in detail
+    assert "ALLOW_PAID_JEV" in detail
+    assert "fake-key-for-tests" not in detail
+
+
+def test_missing_groq_api_key_returns_503(monkeypatch):
+    # No override for get_provider: GroqProvider() construction runs for
+    # real and raises EnvironmentError for the missing key.
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    client = make_client_real_llm(FakeDecisionProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "misconfigured" in detail
+    assert "GROQ_API_KEY" in detail
+    assert "Traceback" not in response.text
 
 
 # ── GroqProvider 429 / retry tests (mocked httpx + mocked sleep) ───────────────
@@ -206,6 +312,17 @@ def test_429_three_times_raises_rate_limit_error(groq_provider):
     assert mock_sleep.call_count == MAX_RATE_LIMIT_RETRIES
 
 
+@pytest.mark.parametrize("status", [401, 403])
+def test_groq_401_and_403_raise_auth_error(groq_provider, status):
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status
+    resp.headers = {}
+
+    with patch("app.llm.httpx.post", return_value=resp):
+        with pytest.raises(GroqAuthError, match=str(status)):
+            groq_provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+
 # ── log-leak tests ─────────────────────────────────────────────────────────────
 
 import logging
@@ -253,3 +370,31 @@ def test_idea_text_does_not_appear_in_502_error_response():
     response = client.post("/design", json={"idea": SENSITIVE_IDEA})
     assert response.status_code == 502
     assert SENSITIVE_IDEA not in response.text
+
+
+def test_idea_text_does_not_leak_on_decision_auth_error(caplog):
+    """
+    The 502 from a rejected Jev key must not echo the idea text in the
+    response body or in any log record.
+    """
+    client = make_client_with_decision(AlwaysGoodProvider(), AuthFailDecisionProvider())
+    with caplog.at_level(logging.DEBUG):
+        response = client.post("/design", json={"idea": SENSITIVE_IDEA})
+    assert response.status_code == 502
+    assert SENSITIVE_IDEA not in response.text
+    for record in caplog.records:
+        assert SENSITIVE_IDEA not in record.getMessage()
+
+
+def test_idea_text_does_not_leak_on_groq_auth_error(caplog):
+    """
+    The 502 from a rejected Groq key must not echo the idea text in the
+    response body or in any log record.
+    """
+    client = make_client(GroqAuthFailProvider())
+    with caplog.at_level(logging.DEBUG):
+        response = client.post("/design", json={"idea": SENSITIVE_IDEA})
+    assert response.status_code == 502
+    assert SENSITIVE_IDEA not in response.text
+    for record in caplog.records:
+        assert SENSITIVE_IDEA not in record.getMessage()

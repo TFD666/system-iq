@@ -27,6 +27,10 @@ class RateLimitError(Exception):
     """Raised when Groq returns 429 and retries are exhausted."""
 
 
+class GroqAuthError(Exception):
+    """Raised when Groq rejects the API key (HTTP 401 or 403)."""
+
+
 # ── abstract base ──────────────────────────────────────────────────────────────
 
 class LLMProvider(ABC):
@@ -112,6 +116,11 @@ class GroqProvider(LLMProvider):
                     raise RateLimitError(
                         "Groq rate limit hit and retries exhausted."
                     )
+
+            if response.status_code in (401, 403):
+                raise GroqAuthError(
+                    f"Groq rejected the API key (HTTP {response.status_code})"
+                )
 
             response.raise_for_status()
 

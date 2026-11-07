@@ -19,6 +19,7 @@ import pytest
 from app.decision.provider import (
     Alternative,
     Decision,
+    DecisionAuthError,
     DecisionFormatError,
     DecisionProvider,
     DecisionRateLimitError,
@@ -441,6 +442,37 @@ def test_http_500_raises_unavailable():
 
 
 # ---------------------------------------------------------------------------
+# Test: DecisionAuthError – 401 and 403; other 4xx stays DecisionFormatError
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_http_401_and_403_raise_auth_error(status):
+    # A bad/rejected API key must surface as its own error, not be lumped
+    # into DecisionUnavailableError (which the API layer maps to a 504 that
+    # misleadingly reads as a timeout).
+    provider = _make_provider()
+    question = _noul_question()
+
+    mock_resp = _mock_response({"error": "unauthorized"}, status=status)
+    with patch("app.decision.provider.httpx.post", return_value=mock_resp):
+        with pytest.raises(DecisionAuthError, match=str(status)):
+            provider.decide({}, [question])
+
+
+def test_http_400_raises_format_error():
+    # A non-auth 4xx (bad request) is a format/contract problem, not an
+    # availability problem.
+    provider = _make_provider()
+    question = _noul_question()
+
+    mock_resp = _mock_response({"error": "bad request"}, status=400)
+    with patch("app.decision.provider.httpx.post", return_value=mock_resp):
+        with pytest.raises(DecisionFormatError, match="400"):
+            provider.decide({}, [question])
+
+
+# ---------------------------------------------------------------------------
 # Test: no state text, no question text, and no key in caplog output
 # ---------------------------------------------------------------------------
 
@@ -466,6 +498,26 @@ def test_no_secrets_in_logs(caplog: pytest.LogCaptureFixture):
     assert "my-private-data" not in log_text, "State content leaked into logs"
     assert "Does this need caching" not in log_text, "Question text leaked into logs"
     assert "secret_state" not in log_text, "State key leaked into logs"
+
+
+def test_no_secrets_in_logs_on_auth_error(caplog: pytest.LogCaptureFixture):
+    """Same guarantee, specifically on the 401 (bad API key) path."""
+    provider = _make_provider()
+    question = _noul_question()
+
+    mock_resp = _mock_response({"error": "unauthorized"}, status=401)
+    with patch("app.decision.provider.httpx.post", return_value=mock_resp):
+        with caplog.at_level(logging.DEBUG, logger="app.decision.provider"):
+            with pytest.raises(DecisionAuthError):
+                provider.decide(
+                    {"secret_state": "my-private-data"},
+                    [question],
+                )
+
+    log_text = caplog.text
+    assert FAKE_KEY not in log_text, "API key leaked into logs"
+    assert "my-private-data" not in log_text, "State content leaked into logs"
+    assert "Does this need caching" not in log_text, "Question text leaked into logs"
 
 
 # ---------------------------------------------------------------------------

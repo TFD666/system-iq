@@ -131,6 +131,12 @@ class DecisionFormatError(Exception):
     pass
 
 
+class DecisionAuthError(Exception):
+    """The API rejected the API key (HTTP 401 or 403)."""
+
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
@@ -271,6 +277,14 @@ class JevProvider(DecisionProvider):
                 logger.warning(
                     "Jev returned HTTP %d", resp.status_code
                 )
+                if resp.status_code in (401, 403):
+                    raise DecisionAuthError(
+                        f"Decision service rejected the API key (HTTP {resp.status_code})"
+                    )
+                if 400 <= resp.status_code < 500:
+                    raise DecisionFormatError(
+                        f"Decision service returned HTTP {resp.status_code}"
+                    )
                 raise DecisionUnavailableError(
                     f"Decision service returned HTTP {resp.status_code}"
                 )

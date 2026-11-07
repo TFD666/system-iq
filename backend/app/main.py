@@ -2,11 +2,11 @@ import logging
 import os
 
 import httpx
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .extraction import ExtractionError, extract_requirements
-from .llm import GroqProvider, LLMProvider, RateLimitError
+from .llm import GroqAuthError, GroqProvider, LLMProvider, RateLimitError
 from .schemas import (
     DecisionMeta,
     DecisionResultOut,
@@ -15,6 +15,7 @@ from .schemas import (
     DesignResponse,
 )
 from .decision.provider import (
+    DecisionAuthError,
     DecisionFormatError,
     DecisionProvider,
     DecisionRateLimitError,
@@ -57,8 +58,16 @@ def get_provider() -> LLMProvider:
     Build and return the LLM provider.
     A dependency function (not a module-level singleton) lets tests override
     this via app.dependency_overrides without patching globals.
+    Construction errors (e.g. a missing API key) happen before the route body
+    runs, so they are translated to HTTPException here rather than in design().
     """
-    return GroqProvider()
+    try:
+        return GroqProvider()
+    except EnvironmentError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM service is misconfigured: {e}",
+        )
 
 
 # ── Decision dependency ────────────────────────────────────────────────────────
@@ -77,7 +86,13 @@ def get_decision_provider() -> DecisionProvider:
     if mode == "fake":
         # FakeDecisionProvider never calls the network.
         return FakeDecisionProvider(model=_FAKE_MODEL_LABEL)
-    return JevProvider()
+    try:
+        return JevProvider()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Decision service is misconfigured: {e}",
+        )
 
 
 # ── routes ─────────────────────────────────────────────────────────────────────
@@ -110,6 +125,17 @@ def design(
             content={"detail": f"Could not extract requirements from the idea: {e}"},
         )
 
+    except GroqAuthError:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": (
+                    "LLM service rejected the API key. Check GROQ_API_KEY in "
+                    "backend/.env and restart the server."
+                )
+            },
+        )
+
     except (httpx.TimeoutException, httpx.NetworkError):
         return JSONResponse(
             status_code=504,
@@ -139,6 +165,17 @@ def design(
                 f"retry after {e.retry_after_seconds}s."
             )
         return JSONResponse(status_code=429, content={"detail": msg})
+
+    except DecisionAuthError:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": (
+                    "Decision service rejected the API key. Check OPENCODE_API_KEY "
+                    "in backend/.env and restart the server."
+                )
+            },
+        )
 
     except DecisionUnavailableError:
         return JSONResponse(

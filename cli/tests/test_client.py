@@ -74,15 +74,211 @@ SUCCESS_BODY = {
 
 
 # ── success case ───────────────────────────────────────────────────────────────
+#
+# send_to_backend now prints a human-readable rendering by default (the raw
+# JSON dump moved behind --json / json_mode=True), so the old assertion that
+# stdout IS the JSON body no longer holds for the default call. Split into a
+# readable-mode test and an explicit --json test below.
 
-def test_200_success_prints_json(capsys):
+def test_200_success_prints_readable_requirements(capsys):
     with patch("systemiq.httpx.post", return_value=make_response(200, SUCCESS_BODY)):
         send_to_backend(DUMMY_TEXT, DUMMY_URL)
 
     out = capsys.readouterr().out
-    # Output must be valid JSON and contain the stage field
+    assert "Requirements:" in out
+    assert "app type: web" in out
+    assert "A to-do app" in out
+
+
+def test_json_flag_prints_valid_raw_json_only(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, SUCCESS_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, json_mode=True)
+
+    out = capsys.readouterr().out
+    # Output must be valid JSON and contain the stage field; nothing else on stdout.
     parsed = json.loads(out)
     assert parsed["stage"] == "extracted"
+
+
+# ── readable rendering (requirements + decisions + meta) ───────────────────────
+
+FULL_SUCCESS_BODY = {
+    "stage": "decided",
+    "requirements": {
+        "project_summary": "A to-do app",
+        "app_type": "web",
+        "core_features": ["tasks"],
+        "user_roles": ["user"],
+        "expected_scale": {
+            "users": None,
+            "peak_requests_per_second": None,
+            "data_volume": None,
+        },
+        "realtime": False,
+        "geospatial": False,
+        "authentication": True,
+        "search_filtering": False,
+        "media_storage": False,
+        "payments": False,
+        "offline_support": False,
+        "external_integrations": [],
+        "constraints": [],
+        "assumptions": [],
+        "unknowns": ["payments not specified"],
+        "evidence": {"authentication": "must log in with a password"},
+    },
+    "decisions": [
+        {
+            "id": "primary_database",
+            "question": "Which database best suits the data storage needs of this project?",
+            "status": "accepted",
+            "choice": "PostgreSQL",
+            "probability": 0.82,
+            "top_alternatives": [{"option": "PostgreSQL", "probability": 0.82}],
+            "based_on_unknowns": False,
+        },
+        {
+            "id": "cache_needed",
+            "question": "Does this project need a caching layer to meet its performance requirements?",
+            "status": "uncertain",
+            "choice": None,
+            "probability": 0.5,
+            "top_alternatives": [],
+            "based_on_unknowns": True,
+        },
+    ],
+    "meta": {
+        "decision_model": "jev-1.13-free",
+        "input_tokens": 120,
+        "output_tokens": 40,
+        "decision_billing": "free",
+        "decision_cost": 0.0,
+    },
+}
+
+
+def test_readable_output_shows_decisions_table_and_summary(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, FULL_SUCCESS_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    out = capsys.readouterr().out
+    assert "Decisions:" in out
+    assert "primary_database" in out
+    assert "PostgreSQL" in out
+    assert "82%" in out
+    assert "jev-1.13-free" in out
+    assert "120" in out and "40" in out
+
+
+def test_readable_output_shows_evidence_quote(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, FULL_SUCCESS_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    out = capsys.readouterr().out
+    assert "authentication: yes" in out
+    assert "must log in with a password" in out
+
+
+def test_readable_output_marks_based_on_unknowns(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, FULL_SUCCESS_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    out = capsys.readouterr().out
+    table_lines = [
+        line for line in out.splitlines()
+        if line.strip().startswith("cache_needed")
+    ]
+    assert table_lines, "expected a decisions-table row for cache_needed"
+    assert table_lines[0].rstrip().endswith("?")
+
+    # The row for a decision that is NOT based on unknowns must not be marked.
+    other_lines = [
+        line for line in out.splitlines()
+        if line.strip().startswith("primary_database")
+    ]
+    assert other_lines
+    assert not other_lines[0].rstrip().endswith("?")
+
+
+def test_fake_decision_model_prints_warning(capsys):
+    fake_body = json.loads(json.dumps(FULL_SUCCESS_BODY))
+    fake_body["meta"]["decision_model"] = "fake (demo only)"
+
+    with patch("systemiq.httpx.post", return_value=make_response(200, fake_body)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "FAKE" in err
+
+
+def test_non_free_billing_prints_warning(capsys):
+    billed_body = json.loads(json.dumps(FULL_SUCCESS_BODY))
+    billed_body["meta"]["decision_billing"] = "paid"
+    billed_body["meta"]["decision_cost"] = 0.05
+
+    with patch("systemiq.httpx.post", return_value=make_response(200, billed_body)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    err = capsys.readouterr().err
+    assert "warning" in err
+    assert "billed" in err
+
+
+def test_readable_output_handles_missing_optional_fields(capsys):
+    # Older-style response: no evidence, no question text, no meta at all.
+    minimal_body = {
+        "stage": "decided",
+        "requirements": {
+            "project_summary": "A to-do app",
+            "app_type": "web",
+            "core_features": ["tasks"],
+            "user_roles": ["user"],
+            "expected_scale": {
+                "users": None,
+                "peak_requests_per_second": None,
+                "data_volume": None,
+            },
+            "realtime": None,
+            "geospatial": None,
+            "authentication": True,
+            "search_filtering": None,
+            "media_storage": None,
+            "payments": None,
+            "offline_support": None,
+            "external_integrations": [],
+            "constraints": [],
+            "assumptions": [],
+            "unknowns": [],
+        },
+        "decisions": [
+            {
+                "id": "primary_database",
+                "status": "accepted",
+                "choice": "PostgreSQL",
+                "probability": 0.82,
+                "top_alternatives": [],
+                "based_on_unknowns": False,
+            }
+        ],
+    }
+
+    with patch("systemiq.httpx.post", return_value=make_response(200, minimal_body)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL)  # must not raise
+
+    out = capsys.readouterr().out
+    assert "Requirements:" in out
+    assert "authentication: yes" in out
+    assert "primary_database" in out
+
+
+def test_readable_output_is_ascii_only(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, FULL_SUCCESS_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    captured = capsys.readouterr()
+    for stream in (captured.out, captured.err):
+        stream.encode("ascii")  # raises UnicodeEncodeError if anything non-ASCII slipped in
 
 
 # ── connection / transport errors ──────────────────────────────────────────────
@@ -108,9 +304,16 @@ def test_timeout_prints_error_and_exits(capsys):
 
 
 # ── HTTP error status codes ────────────────────────────────────────────────────
+#
+# 429/502/503/504 now prefer the backend's own "detail" string (see
+# send_to_backend) over the old fixed message. The three tests below used to
+# send a "detail" body and assert on the OLD fixed wording; that assumption
+# is gone now that detail is shown, so they're rewritten to cover the
+# fallback path (no usable detail) instead, and new tests below cover the
+# detail-shown path for all four codes.
 
-def test_429_prints_rate_limit_error_and_exits(capsys):
-    with patch("systemiq.httpx.post", return_value=make_response(429, {"detail": "too many"})):
+def test_429_falls_back_to_fixed_message_without_detail(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(429, {})):
         with pytest.raises(SystemExit) as exc_info:
             send_to_backend(DUMMY_TEXT, DUMMY_URL)
 
@@ -119,8 +322,8 @@ def test_429_prints_rate_limit_error_and_exits(capsys):
     assert "rate limited" in err
 
 
-def test_502_prints_extraction_error_and_exits(capsys):
-    with patch("systemiq.httpx.post", return_value=make_response(502, {"detail": "bad"})):
+def test_502_falls_back_to_fixed_message_without_detail(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(502, {})):
         with pytest.raises(SystemExit) as exc_info:
             send_to_backend(DUMMY_TEXT, DUMMY_URL)
 
@@ -129,8 +332,8 @@ def test_502_prints_extraction_error_and_exits(capsys):
     assert "extract" in err
 
 
-def test_504_prints_timeout_error_and_exits(capsys):
-    with patch("systemiq.httpx.post", return_value=make_response(504, {"detail": "timeout"})):
+def test_504_falls_back_to_fixed_message_without_detail(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(504, {})):
         with pytest.raises(SystemExit) as exc_info:
             send_to_backend(DUMMY_TEXT, DUMMY_URL)
 
@@ -139,15 +342,55 @@ def test_504_prints_timeout_error_and_exits(capsys):
     assert "timed out" in err
 
 
+def test_503_falls_back_to_fixed_message_without_detail(capsys):
+    # 503 previously had no dedicated handling at all (it fell through to the
+    # generic "other" branch); it is now one of the four detail-aware codes.
+    with patch("systemiq.httpx.post", return_value=make_response(503, {})):
+        with pytest.raises(SystemExit) as exc_info:
+            send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "misconfigured" in err
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_detail_aware_status_codes_print_backend_detail(capsys, status):
+    with patch(
+        "systemiq.httpx.post",
+        return_value=make_response(status, {"detail": "a specific backend reason"}),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert err.strip() == "error: a specific backend reason"
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_detail_aware_status_codes_fall_back_on_non_json_body(capsys, status):
+    with patch("systemiq.httpx.post", return_value=make_response(status, "not json")):
+        with pytest.raises(SystemExit) as exc_info:
+            send_to_backend(DUMMY_TEXT, DUMMY_URL)
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    # Falls back to the fixed message rather than crashing on bad JSON.
+    assert err.strip().startswith("error:")
+
+
 def test_other_non_200_prints_status_code_and_exits(capsys):
-    with patch("systemiq.httpx.post", return_value=make_response(503, {"detail": "unavailable"})):
+    # 500 is not one of the four detail-aware codes, so the old generic
+    # "HTTP <code>: <detail>" format still applies, unchanged.
+    with patch("systemiq.httpx.post", return_value=make_response(500, {"detail": "unavailable"})):
         with pytest.raises(SystemExit) as exc_info:
             send_to_backend(DUMMY_TEXT, DUMMY_URL)
 
     assert exc_info.value.code == 1
     err = capsys.readouterr().err
     # Must include the numeric status code
-    assert "503" in err
+    assert "500" in err
 
 
 def test_non_json_body_prints_unexpected_error_and_exits(capsys):
