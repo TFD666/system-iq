@@ -5,6 +5,7 @@ The GroqProvider 429 tests mock httpx.post and time.sleep so no real
 network calls or real sleeping occur.
 """
 import json
+import re
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -88,6 +89,30 @@ class AuthFailDecisionProvider(DecisionProvider):
         raise DecisionAuthError("Decision service rejected the API key (HTTP 401)")
 
 
+class GoodProviderWithDesign(LLMProvider):
+    """Succeeds at extraction AND at writing the design (complete_text)."""
+    def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        return LLMResult(text=VALID_JSON, prompt_tokens=10, completion_tokens=20)
+
+    def complete_text(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        # Echo back the real headings with >= 80 words each so the
+        # per-group quality gate passes on the first try (no retries) --
+        # otherwise every group would retry for having no real headings.
+        headings = re.findall(r"^## \d+\..*$", system, re.MULTILINE)
+        filler = " ".join(["Some generated section text."] * 21)  # 4 words x 21 = 84
+        body = "\n\n".join(f"{heading}\n{filler}" for heading in headings)
+        return LLMResult(text=body, prompt_tokens=15, completion_tokens=25)
+
+
+class DesignRateLimitedProvider(LLMProvider):
+    """Succeeds at extraction, but hits a rate limit while writing the design."""
+    def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        return LLMResult(text=VALID_JSON, prompt_tokens=10, completion_tokens=20)
+
+    def complete_text(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        raise RateLimitError("Groq rate limit hit and retries exhausted.")
+
+
 # ── TestClient factory ─────────────────────────────────────────────────────────
 
 def make_client(provider: LLMProvider) -> TestClient:
@@ -136,9 +161,11 @@ def clear_dependency_overrides():
 # ── /design endpoint tests ─────────────────────────────────────────────────────
 
 def test_valid_idea_returns_200_and_stage_decided():
-    # Stage is now "decided" because the endpoint always runs extraction + decisions.
+    # The default stage is now "design" (the full pipeline), so this test
+    # must ask for stage="decide" explicitly to still exercise/assert the
+    # "decided" stopping point -- that's the point of this specific test.
     client = make_client(AlwaysGoodProvider())
-    response = client.post("/design", json={"idea": "Build a to-do app"})
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "decide"})
     assert response.status_code == 200
     body = response.json()
     assert body["stage"] == "decided"   # was "extracted" before decision wiring
@@ -174,6 +201,125 @@ def test_rate_limit_error_returns_429():
     response = client.post("/design", json={"idea": "Build something"})
     assert response.status_code == 429
     assert "wait" in response.json()["detail"].lower()
+
+
+# ── stage switching ──────────────────────────────────────────────────────────
+
+def test_stage_extract_returns_extracted_and_skips_decisions():
+    client = make_client(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "extract"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage"] == "extracted"
+    assert body["decisions"] is None
+    assert body["meta"] is None
+    assert body["design_markdown"] is None
+
+
+def test_stage_decide_returns_decided_and_skips_design():
+    client = make_client(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "decide"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage"] == "decided"
+    assert body["decisions"] is not None
+    assert body["meta"] is not None
+    assert body["design_markdown"] is None
+    assert body["design_warnings"] is None
+    # The design-only meta fields must stay unset at this stage.
+    assert body["meta"]["llm_model"] is None
+
+
+def test_stage_defaults_to_design_and_returns_markdown_and_warnings():
+    # AlwaysGoodProvider has no complete_text, so this uses the provider
+    # that implements both -- proving "design" (not just "decide") is the
+    # actual default when "stage" is omitted.
+    client = make_client(GoodProviderWithDesign())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage"] == "designed"
+    assert body["design_markdown"]
+    assert isinstance(body["design_warnings"], list)
+
+    meta = body["meta"]
+    assert meta["llm_model"]
+    assert meta["design_prompt_tokens"] == 15 * 4  # 4 section groups
+    assert meta["design_completion_tokens"] == 25 * 4
+
+
+def test_design_stage_rate_limit_returns_429():
+    client = make_client(DesignRateLimitedProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "design"})
+    assert response.status_code == 429
+    assert "wait" in response.json()["detail"].lower()
+
+
+def test_invalid_stage_returns_422():
+    client = make_client(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "bogus"})
+    assert response.status_code == 422
+
+
+class AlwaysBadDesignProvider(LLMProvider):
+    """Succeeds at extraction, but complete_text never produces real headings."""
+    def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        return LLMResult(text=VALID_JSON, prompt_tokens=10, completion_tokens=20)
+
+    def complete_text(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        return LLMResult(text="nothing useful", prompt_tokens=5, completion_tokens=5)
+
+
+def test_design_warnings_reach_the_http_response():
+    # Verifies the warnings plumbing end to end: a group that's bad even
+    # after its retry must show up in the JSON response's design_warnings.
+    client = make_client(AlwaysBadDesignProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["design_warnings"]
+    assert any("missing heading" in w for w in body["design_warnings"])
+
+
+def test_design_group_stats_reach_the_http_response():
+    client = make_client(GoodProviderWithDesign())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 200
+    stats = response.json()["meta"]["design_group_stats"]
+    assert len(stats) == 4
+    for stat in stats:
+        assert stat["id"] in {"g1", "g2", "g3", "g4"}
+        assert stat["retries"] == 0
+        assert stat["prompt_tokens"] == 15
+        assert stat["completion_tokens"] == 25
+        assert stat["elapsed_seconds"] >= 0
+
+
+def test_replay_mode_decision_provider_reports_replay_label(tmp_path, monkeypatch):
+    replay_file = tmp_path / "saved.json"
+    replay_file.write_text(json.dumps({"decisions": []}), encoding="utf-8")
+    monkeypatch.setenv("DECISION_PROVIDER", "replay")
+    monkeypatch.setenv("DECISION_REPLAY_FILE", str(replay_file))
+
+    client = make_client_real_decision(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "decide"})
+
+    assert response.status_code == 200
+    meta = response.json()["meta"]
+    assert meta["decision_model"] == "replay (saved Jev output, not a live call)"
+    assert meta["decision_billing"] == "free"
+    assert meta["decision_cost"] == 0.0
+
+
+def test_replay_mode_without_file_env_returns_503(monkeypatch):
+    monkeypatch.setenv("DECISION_PROVIDER", "replay")
+    monkeypatch.delenv("DECISION_REPLAY_FILE", raising=False)
+
+    client = make_client_real_decision(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "decide"})
+
+    assert response.status_code == 503
+    assert "DECISION_REPLAY_FILE" in response.json()["detail"]
 
 
 # ── auth / misconfiguration error mapping ───────────────────────────────────────
@@ -249,6 +395,18 @@ def _make_429_response(retry_after: int = 1) -> MagicMock:
     return resp
 
 
+def _make_429_message_response(message: str) -> MagicMock:
+    """
+    Build a mock 429 Response with NO Retry-After header, so GroqProvider
+    is forced to parse the wait time out of the error message text instead.
+    """
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = 429
+    resp.headers = {}
+    resp.json.return_value = {"error": {"message": message}}
+    return resp
+
+
 def _make_200_response(text: str = VALID_JSON) -> MagicMock:
     """Build a mock httpx.Response that looks like a successful Groq response."""
     resp = MagicMock(spec=httpx.Response)
@@ -283,8 +441,9 @@ def test_429_then_success_retries_and_returns(groq_provider):
             system="sys", user="usr", max_tokens=100
         )
 
-    # sleep was called once with the capped retry-after value
-    mock_sleep.assert_called_once_with(2)
+    # The wait is now the requested delay PLUS a 1s buffer (never a shorter
+    # guess than what was actually requested), so retry_after=2 -> 3.
+    mock_sleep.assert_called_once_with(3)
     # httpx.post was called twice total
     assert mock_post.call_count == 2
     # The successful response's token counts come through
@@ -294,10 +453,9 @@ def test_429_then_success_retries_and_returns(groq_provider):
 
 def test_429_three_times_raises_rate_limit_error(groq_provider):
     """
-    Three 429s in a row (attempt 0, 1, 2) exhaust MAX_RATE_LIMIT_RETRIES (2)
-    and must raise RateLimitError. sleep is called for the first two 429s only.
+    MAX_RATE_LIMIT_RETRIES + 1 429s in a row exhaust all retries and must
+    raise RateLimitError. sleep is called on every attempt except the last.
     """
-    # MAX_RATE_LIMIT_RETRIES = 2, so loop runs 3 times (attempts 0, 1, 2)
     responses = [_make_429_response()] * (MAX_RATE_LIMIT_RETRIES + 1)
 
     with patch("app.llm.httpx.post", side_effect=responses), \
@@ -312,6 +470,75 @@ def test_429_three_times_raises_rate_limit_error(groq_provider):
     assert mock_sleep.call_count == MAX_RATE_LIMIT_RETRIES
 
 
+# ── 429 wait-time parsing (header vs. message text) ─────────────────────────────
+# Reproduces the bug: Groq's free-tier output-token limit asked for ~14.7s
+# and we only waited ~4s/8s, because we weren't reading the message at all.
+
+def test_429_wait_time_comes_from_retry_after_header_when_present(groq_provider):
+    # retry-after header says 2s; message text (ignored) says something else.
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = 429
+    resp.headers = {"retry-after": "2"}
+    resp.json.return_value = {"error": {"message": "try again in 99s"}}
+    responses = [resp, _make_200_response()]
+
+    with patch("app.llm.httpx.post", side_effect=responses), \
+         patch("app.llm.time.sleep") as mock_sleep:
+        groq_provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    mock_sleep.assert_called_once_with(3)  # header value (2) + 1s buffer
+
+
+def test_429_wait_time_parsed_from_decimal_seconds_message(groq_provider):
+    message = "Limit 1000, Used 660, Requested 585. Please try again in 14.7s."
+    responses = [_make_429_message_response(message), _make_200_response()]
+
+    with patch("app.llm.httpx.post", side_effect=responses), \
+         patch("app.llm.time.sleep") as mock_sleep:
+        groq_provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    mock_sleep.assert_called_once_with(15.7)  # 14.7 + 1s buffer
+
+
+def test_429_wait_time_parsed_from_minutes_only_message(groq_provider):
+    message = "Please try again in 1m."
+    responses = [_make_429_message_response(message), _make_200_response()]
+
+    with patch("app.llm.httpx.post", side_effect=responses), \
+         patch("app.llm.time.sleep") as mock_sleep:
+        groq_provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    mock_sleep.assert_called_once_with(61)  # 60 + 1s buffer
+
+
+def test_429_requested_wait_over_cap_raises_immediately_without_sleeping(groq_provider):
+    # "2m5.3s" = 125.3s, well over the 65s cap -- must fail fast, not sleep.
+    message = "Please try again in 2m5.3s."
+    resp = _make_429_message_response(message)
+
+    with patch("app.llm.httpx.post", return_value=resp), \
+         patch("app.llm.time.sleep") as mock_sleep:
+        with pytest.raises(RateLimitError) as exc_info:
+            groq_provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    mock_sleep.assert_not_called()
+    assert exc_info.value.retry_after_seconds == pytest.approx(125.3)
+
+
+def test_429_never_logs_the_provider_message_text(groq_provider, caplog):
+    # The message text can contain an organisation id; only numbers may be logged.
+    message = "org_abc123xyz rate limit hit. Please try again in 2s."
+    responses = [_make_429_message_response(message), _make_200_response()]
+
+    with patch("app.llm.httpx.post", side_effect=responses), \
+         patch("app.llm.time.sleep"):
+        with caplog.at_level(logging.DEBUG):
+            groq_provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    for record in caplog.records:
+        assert "org_abc123xyz" not in record.getMessage()
+
+
 @pytest.mark.parametrize("status", [401, 403])
 def test_groq_401_and_403_raise_auth_error(groq_provider, status):
     resp = MagicMock(spec=httpx.Response)
@@ -321,6 +548,78 @@ def test_groq_401_and_403_raise_auth_error(groq_provider, status):
     with patch("app.llm.httpx.post", return_value=resp):
         with pytest.raises(GroqAuthError, match=str(status)):
             groq_provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+
+def test_complete_text_returns_result_without_json_mode(groq_provider):
+    # complete_text must NOT set response_format (that's JSON-mode only).
+    resp = _make_200_response(text="# Some Markdown\n\nBody text.")
+
+    with patch("app.llm.httpx.post", return_value=resp) as mock_post:
+        result = groq_provider.complete_text(system="sys", user="usr", max_tokens=100)
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert "response_format" not in sent_payload
+    assert result.text == "# Some Markdown\n\nBody text."
+    assert result.prompt_tokens == 30
+    assert result.completion_tokens == 50
+
+
+def test_complete_text_strips_leftover_think_tags(groq_provider):
+    resp = _make_200_response(text="<think>reasoning...</think># Heading\n\nBody.")
+
+    with patch("app.llm.httpx.post", return_value=resp):
+        result = groq_provider.complete_text(system="sys", user="usr", max_tokens=100)
+
+    assert "<think>" not in result.text
+    assert result.text == "# Heading\n\nBody."
+
+
+def test_complete_text_uses_groq_design_model_env_var(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key-for-tests")
+    monkeypatch.setenv("GROQ_MODEL", "extraction-model")
+    monkeypatch.setenv("GROQ_DESIGN_MODEL", "design-model")
+    provider = GroqProvider()
+
+    with patch("app.llm.httpx.post", return_value=_make_200_response()) as mock_post:
+        provider.complete_text(system="sys", user="usr", max_tokens=100)
+
+    assert mock_post.call_args.kwargs["json"]["model"] == "design-model"
+
+
+def test_complete_json_still_uses_groq_model_env_var(monkeypatch):
+    # Extraction keeps using GROQ_MODEL even when GROQ_DESIGN_MODEL is set.
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key-for-tests")
+    monkeypatch.setenv("GROQ_MODEL", "extraction-model")
+    monkeypatch.setenv("GROQ_DESIGN_MODEL", "design-model")
+    provider = GroqProvider()
+
+    with patch("app.llm.httpx.post", return_value=_make_200_response()) as mock_post:
+        provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    assert mock_post.call_args.kwargs["json"]["model"] == "extraction-model"
+
+
+def test_complete_text_falls_back_to_groq_model_without_design_model_env(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key-for-tests")
+    monkeypatch.setenv("GROQ_MODEL", "extraction-model")
+    monkeypatch.delenv("GROQ_DESIGN_MODEL", raising=False)
+    provider = GroqProvider()
+
+    with patch("app.llm.httpx.post", return_value=_make_200_response()) as mock_post:
+        provider.complete_text(system="sys", user="usr", max_tokens=100)
+
+    assert mock_post.call_args.kwargs["json"]["model"] == "extraction-model"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_complete_text_401_and_403_raise_auth_error(groq_provider, status):
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status
+    resp.headers = {}
+
+    with patch("app.llm.httpx.post", return_value=resp):
+        with pytest.raises(GroqAuthError, match=str(status)):
+            groq_provider.complete_text(system="sys", user="usr", max_tokens=100)
 
 
 # ── log-leak tests ─────────────────────────────────────────────────────────────
@@ -334,10 +633,13 @@ def test_idea_text_does_not_appear_in_logs_on_success(caplog):
     """
     After a successful /design call, the idea text must not appear in any
     log record at any level.
+    stage="extract" here: this test only cares about the extraction step's
+    logging, and AlwaysGoodProvider doesn't implement complete_text (which
+    the default stage="design" would now also call).
     """
     client = make_client(AlwaysGoodProvider())
     with caplog.at_level(logging.DEBUG):
-        response = client.post("/design", json={"idea": SENSITIVE_IDEA})
+        response = client.post("/design", json={"idea": SENSITIVE_IDEA, "stage": "extract"})
     assert response.status_code == 200
 
     for record in caplog.records:

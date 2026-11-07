@@ -665,3 +665,63 @@ class FakeDecisionProvider(DecisionProvider):
             billing_source=self._billing_source,
             cost=self._cost,
         )
+
+
+# ---------------------------------------------------------------------------
+# Replay provider – reuses decisions saved from a real /design response
+# ---------------------------------------------------------------------------
+
+
+class ReplayDecisionProvider(DecisionProvider):
+    """
+    Returns decisions saved in a real /design response JSON file instead
+    of calling Jev live. Lets you replay a past run offline for testing
+    or a demo. Never touches the network.
+    """
+
+    # Reported in meta.decision_model so callers (and the CLI) can tell
+    # this apart from a live call or the fake-mode demo provider.
+    REPLAY_MODEL_LABEL = "replay (saved Jev output, not a live call)"
+
+    def __init__(self, replay_file: str) -> None:
+        # utf-8-sig strips a leading BOM if the saved file has one.
+        with open(replay_file, "r", encoding="utf-8-sig") as f:
+            saved = json.load(f)
+        self._saved_by_id: dict[str, dict] = {
+            entry["id"]: entry for entry in (saved.get("decisions") or [])
+        }
+
+    def decide(
+        self,
+        state: dict[str, Any],
+        questions: list[Question],
+    ) -> DecisionResultSet:
+        decisions: dict[str, Decision] = {}
+        for q in questions:
+            saved = self._saved_by_id.get(q.id)
+            if saved is not None:
+                decisions[q.id] = Decision(
+                    id=q.id,
+                    kind=q.kind,
+                    choice=saved.get("choice"),
+                    probability=float(saved.get("probability", 0.0)),
+                    alternatives=[
+                        Alternative(option=alt["option"], probability=alt["probability"])
+                        for alt in (saved.get("top_alternatives") or [])
+                    ],
+                )
+            else:
+                # Unknown id: force kind="choice" with 0 alternatives.
+                # apply_policy turns that into status="needs_review" at
+                # probability 0 for ANY question kind, which is exactly
+                # the "we don't have a saved answer" result we want.
+                decisions[q.id] = Decision(id=q.id, kind="choice", probability=0.0)
+
+        return DecisionResultSet(
+            decisions=decisions,
+            model=self.REPLAY_MODEL_LABEL,
+            input_tokens=0,
+            output_tokens=0,
+            billing_source="free",
+            cost=0.0,
+        )

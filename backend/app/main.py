@@ -5,12 +5,14 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .design import TokenBudget, write_design
 from .extraction import ExtractionError, extract_requirements
-from .llm import GroqAuthError, GroqProvider, LLMProvider, RateLimitError
+from .llm import DEFAULT_GROQ_MODEL, GroqAuthError, GroqProvider, LLMProvider, RateLimitError
 from .schemas import (
     DecisionMeta,
     DecisionResultOut,
     AlternativeOut,
+    DesignGroupStat,
     DesignRequest,
     DesignResponse,
 )
@@ -22,6 +24,7 @@ from .decision.provider import (
     DecisionUnavailableError,
     FakeDecisionProvider,
     JevProvider,
+    ReplayDecisionProvider,
 )
 from .decision.questions import build_questions, build_state
 from .decision.policy import apply_policy
@@ -86,6 +89,21 @@ def get_decision_provider() -> DecisionProvider:
     if mode == "fake":
         # FakeDecisionProvider never calls the network.
         return FakeDecisionProvider(model=_FAKE_MODEL_LABEL)
+    if mode == "replay":
+        # ReplayDecisionProvider reads a saved file; never calls the network.
+        replay_file = os.environ.get("DECISION_REPLAY_FILE")
+        if not replay_file:
+            raise HTTPException(
+                status_code=503,
+                detail="Decision service is misconfigured: DECISION_REPLAY_FILE is not set.",
+            )
+        try:
+            return ReplayDecisionProvider(replay_file)
+        except (OSError, ValueError) as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Decision service is misconfigured: could not read the replay file ({type(e).__name__}).",
+            )
     try:
         return JevProvider()
     except ValueError as e:
@@ -104,9 +122,11 @@ def design(
     decision_provider: DecisionProvider = Depends(get_decision_provider),
 ):
     """
-    Accept a project idea and return extracted requirements plus architecture
-    decisions. All heavy lifting happens in extraction.py and the decision
-    provider; errors are translated to HTTP codes here.
+    Accept a project idea and run the pipeline up to request.stage:
+    "extract" -> requirements only, "decide" -> + architecture decisions,
+    "design" (default) -> + a written design document.
+    All heavy lifting happens in extraction.py, the decision provider, and
+    app/design/; errors are translated to HTTP codes here.
     Provider is synchronous, so this is a plain def, not async def.
     """
     # ── Step 1: extract requirements from the idea ──────────────────────────
@@ -141,6 +161,9 @@ def design(
             status_code=504,
             content={"detail": "The AI provider did not respond in time. Please try again."},
         )
+
+    if request.stage == "extract":
+        return DesignResponse(stage="extracted", requirements=requirements)
 
     # ── Step 2: build state and questions from requirements ─────────────────
     state = build_state(requirements)
@@ -209,7 +232,7 @@ def design(
             )
         )
 
-    meta = DecisionMeta(
+    meta_kwargs = dict(
         decision_model=result_set.model,
         input_tokens=result_set.input_tokens,
         output_tokens=result_set.output_tokens,
@@ -217,9 +240,56 @@ def design(
         decision_cost=result_set.cost,
     )
 
+    if request.stage == "decide":
+        return DesignResponse(
+            stage="decided",
+            requirements=requirements,
+            decisions=decision_results,
+            meta=DecisionMeta(**meta_kwargs),
+        )
+
+    # ── Step 5: write the design document (stage == "design") ───────────────
+    try:
+        design_result = write_design(requirements, decision_results, llm, TokenBudget())
+
+    except RateLimitError:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "Rate limit reached while writing the design. Please wait a moment and try again."
+            },
+        )
+
+    except GroqAuthError:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": (
+                    "LLM service rejected the API key. Check GROQ_API_KEY in "
+                    "backend/.env and restart the server."
+                )
+            },
+        )
+
+    meta_kwargs["llm_model"] = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    meta_kwargs["design_prompt_tokens"] = design_result.prompt_tokens
+    meta_kwargs["design_completion_tokens"] = design_result.completion_tokens
+    meta_kwargs["design_group_stats"] = [
+        DesignGroupStat(
+            id=stat.id,
+            prompt_tokens=stat.prompt_tokens,
+            completion_tokens=stat.completion_tokens,
+            retries=stat.retries,
+            elapsed_seconds=stat.elapsed_seconds,
+        )
+        for stat in design_result.group_stats
+    ]
+
     return DesignResponse(
-        stage="decided",
+        stage="designed",
         requirements=requirements,
         decisions=decision_results,
-        meta=meta,
+        meta=DecisionMeta(**meta_kwargs),
+        design_markdown=design_result.markdown,
+        design_warnings=design_result.warnings,
     )

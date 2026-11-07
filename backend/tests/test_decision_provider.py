@@ -28,6 +28,7 @@ from app.decision.provider import (
     FakeDecisionProvider,
     JevProvider,
     Question,
+    ReplayDecisionProvider,
 )
 
 # ---------------------------------------------------------------------------
@@ -541,6 +542,99 @@ def test_fake_provider_returns_canned():
     assert result.decisions["q1"].probability == pytest.approx(0.9)
     # q2 was not in canned -> gets the 0.5 default.
     assert result.decisions["q2"].probability == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Test: ReplayDecisionProvider reads a saved /design response, never the network
+# ---------------------------------------------------------------------------
+
+SAVED_RESPONSE = {
+    "stage": "decided",
+    "decisions": [
+        {
+            "id": "primary_database",
+            "question": "Which database fits best?",
+            "status": "accepted",
+            "choice": "PostgreSQL",
+            "probability": 0.91,
+            "top_alternatives": [
+                {"option": "PostgreSQL", "probability": 0.91},
+                {"option": "MongoDB", "probability": 0.09},
+            ],
+            "based_on_unknowns": False,
+        },
+    ],
+}
+
+
+def _write_saved_response(path, with_bom: bool) -> None:
+    text = json.dumps(SAVED_RESPONSE)
+    encoding = "utf-8-sig" if with_bom else "utf-8"
+    path.write_text(text, encoding=encoding)
+
+
+def test_replay_provider_returns_saved_decision_for_known_id(tmp_path):
+    replay_file = tmp_path / "saved.json"
+    _write_saved_response(replay_file, with_bom=False)
+    provider = ReplayDecisionProvider(str(replay_file))
+
+    questions = [Question(id="primary_database", kind="choice", text="Which database fits best?")]
+    result = provider.decide({}, questions)
+
+    decision = result.decisions["primary_database"]
+    assert decision.choice == "PostgreSQL"
+    assert decision.probability == pytest.approx(0.91)
+    assert len(decision.alternatives) == 2
+
+
+def test_replay_provider_unknown_id_gets_needs_review_at_zero_probability(tmp_path):
+    replay_file = tmp_path / "saved.json"
+    _write_saved_response(replay_file, with_bom=False)
+    provider = ReplayDecisionProvider(str(replay_file))
+
+    # This question's id was never in the saved file.
+    questions = [Question(id="cache_needed", kind="noul", text="Need caching?")]
+    result = provider.decide({}, questions)
+
+    decision = result.decisions["cache_needed"]
+    assert decision.probability == 0.0
+    assert decision.choice is None
+    # Forced kind="choice" + probability 0 is what apply_policy turns into
+    # status "needs_review" for ANY original question kind (even "noul").
+    assert decision.kind == "choice"
+
+
+def test_replay_provider_reads_file_with_bom(tmp_path):
+    replay_file = tmp_path / "saved_with_bom.json"
+    _write_saved_response(replay_file, with_bom=True)
+    assert replay_file.read_bytes().startswith(b"\xef\xbb\xbf")  # confirm the BOM is really there
+
+    provider = ReplayDecisionProvider(str(replay_file))
+    questions = [Question(id="primary_database", kind="choice", text="Which database fits best?")]
+    result = provider.decide({}, questions)
+
+    assert result.decisions["primary_database"].choice == "PostgreSQL"
+
+
+def test_replay_provider_reports_its_own_model_billing_and_cost(tmp_path):
+    replay_file = tmp_path / "saved.json"
+    _write_saved_response(replay_file, with_bom=False)
+    provider = ReplayDecisionProvider(str(replay_file))
+
+    result = provider.decide({}, [])
+
+    assert result.model == "replay (saved Jev output, not a live call)"
+    assert result.billing_source == "free"
+    assert result.cost == 0.0
+
+
+def test_replay_provider_never_touches_the_network(tmp_path):
+    replay_file = tmp_path / "saved.json"
+    _write_saved_response(replay_file, with_bom=False)
+    provider = ReplayDecisionProvider(str(replay_file))
+
+    with patch("app.decision.provider.httpx.post", side_effect=AssertionError("must not be called")):
+        provider.decide({}, [Question(id="primary_database", kind="choice", text="Which database fits best?")])
 
 
 # ---------------------------------------------------------------------------

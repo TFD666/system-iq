@@ -403,16 +403,23 @@ class TestBasedOnUnknowns:
 # ---------------------------------------------------------------------------
 
 class TestDesignEndpoint:
+    """
+    These all test the "decided" stopping point specifically (decisions
+    list, question text, meta token counts), so they now pass
+    stage="decide" explicitly -- the default stage changed to "design",
+    which _GoodLLM (complete_json only) can't do, and isn't what these
+    tests are about anyway.
+    """
 
     def test_returns_200_with_decided_stage(self):
         client = _make_client()
-        resp = client.post("/design", json={"idea": "Build a chat app"})
+        resp = client.post("/design", json={"idea": "Build a chat app", "stage": "decide"})
         assert resp.status_code == 200
         assert resp.json()["stage"] == "decided"
 
     def test_decisions_list_is_present(self):
         client = _make_client()
-        resp = client.post("/design", json={"idea": "Build a chat app"})
+        resp = client.post("/design", json={"idea": "Build a chat app", "stage": "decide"})
         body = resp.json()
         assert "decisions" in body
         assert isinstance(body["decisions"], list)
@@ -420,7 +427,7 @@ class TestDesignEndpoint:
 
     def test_each_decision_has_required_fields(self):
         client = _make_client()
-        body = client.post("/design", json={"idea": "Build a chat app"}).json()
+        body = client.post("/design", json={"idea": "Build a chat app", "stage": "decide"}).json()
         for dec in body["decisions"]:
             assert "id" in dec
             assert "question" in dec
@@ -431,26 +438,28 @@ class TestDesignEndpoint:
     def test_every_decision_has_non_empty_question(self):
         # Each decision must carry a non-empty fixed template sentence.
         client = _make_client()
-        body = client.post("/design", json={"idea": "Build a chat app"}).json()
+        body = client.post("/design", json={"idea": "Build a chat app", "stage": "decide"}).json()
         for dec in body["decisions"]:
             assert dec["question"], f"Decision '{dec['id']}' has an empty question"
 
     def test_fake_mode_meta_model_label(self):
         # When FakeDecisionProvider is used, meta.decision_model must be the fake label.
         client = _make_client(decision_provider=FakeDecisionProvider(model="fake (demo only)"))
-        body = client.post("/design", json={"idea": "Build a chat app"}).json()
+        body = client.post(
+            "/design", json={"idea": "Build a chat app", "stage": "decide"}
+        ).json()
         assert body["meta"]["decision_model"] == "fake (demo only)"
 
     def test_meta_has_token_counts(self):
         client = _make_client()
-        body = client.post("/design", json={"idea": "Build a chat app"}).json()
+        body = client.post("/design", json={"idea": "Build a chat app", "stage": "decide"}).json()
         meta = body["meta"]
         assert "input_tokens" in meta
         assert "output_tokens" in meta
 
     def test_requirements_still_present(self):
         client = _make_client()
-        body = client.post("/design", json={"idea": "Build a chat app"}).json()
+        body = client.post("/design", json={"idea": "Build a chat app", "stage": "decide"}).json()
         assert "requirements" in body
 
 
@@ -519,9 +528,11 @@ class TestNoSecretsInLogs:
     SENSITIVE_IDEA = "my absolutely secret idea xyz987"
 
     def test_idea_text_not_in_logs_on_success(self, caplog: pytest.LogCaptureFixture):
+        # stage="decide": _GoodLLM only implements complete_json, and this
+        # test's point (idea text doesn't leak) doesn't depend on the stage.
         client = _make_client()
         with caplog.at_level(logging.DEBUG):
-            client.post("/design", json={"idea": self.SENSITIVE_IDEA})
+            client.post("/design", json={"idea": self.SENSITIVE_IDEA, "stage": "decide"})
         assert self.SENSITIVE_IDEA not in caplog.text
 
     def test_idea_text_not_in_logs_on_llm_failure(self, caplog: pytest.LogCaptureFixture):

@@ -32,6 +32,8 @@ _EVIDENCE_QUOTE_MAX_LEN = 120
 class DesignRequest(BaseModel):
     # The raw project idea from the user
     idea: str = Field(min_length=1, max_length=20_000)
+    # Which pipeline step to stop at. Default "design" runs the whole thing.
+    stage: Literal["extract", "decide", "design"] = "design"
 
 
 class ExpectedScale(BaseModel):
@@ -159,20 +161,40 @@ class DecisionResultOut(BaseModel):
     based_on_unknowns: bool
 
 
+class DesignGroupStat(BaseModel):
+    """Numbers only (no prompt text or model output) for one section group."""
+    id: str
+    prompt_tokens: int
+    completion_tokens: int
+    retries: int
+    elapsed_seconds: float
+
+
 class DecisionMeta(BaseModel):
-    """Token-usage and model metadata from the Jev call."""
+    """Token-usage and model metadata from the Jev call, plus (for the
+    "designed" stage only) the LLM model and token counts for the design
+    write-up step."""
     decision_model: str
     input_tokens: int
     output_tokens: int
     # Set when the provider reports billing info; None for fake/unknown providers.
     decision_billing: str | None = None
     decision_cost: float | None = None
+    # The fields below are only set when stage == "design".
+    llm_model: str | None = None
+    design_prompt_tokens: int | None = None
+    design_completion_tokens: int | None = None
+    design_group_stats: list[DesignGroupStat] | None = None
 
 
 class DesignResponse(BaseModel):
-    # "stage" records which pipeline step produced this response
+    # "stage" records which pipeline step produced this response:
+    # "extracted" | "decided" | "designed"
     stage: str
     requirements: Requirements
-    # Present when stage == "decided"; None for earlier stages
+    # Present when stage == "decided" or "designed"; None for "extracted"
     decisions: list[DecisionResultOut] | None = None
     meta: DecisionMeta | None = None
+    # Present only when stage == "designed"
+    design_markdown: str | None = None
+    design_warnings: list[str] | None = None

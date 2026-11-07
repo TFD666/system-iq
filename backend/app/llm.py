@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -10,6 +11,14 @@ import os
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Matches a <think>...</think> block some reasoning models leave in, even
+# with reasoning_format="hidden". This is just a safety net.
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_think_tags(text: str) -> str:
+    return _THINK_TAG_RE.sub("", text).strip()
 
 
 # ── result type ────────────────────────────────────────────────────────────────
@@ -24,7 +33,16 @@ class LLMResult:
 # ── custom errors ──────────────────────────────────────────────────────────────
 
 class RateLimitError(Exception):
-    """Raised when Groq returns 429 and retries are exhausted."""
+    """
+    Raised when Groq returns 429 and we give up: either retries are
+    exhausted, or Groq asked us to wait longer than we're willing to block.
+    retry_after_seconds is set in the second case so the caller can report
+    a useful wait time (e.g. in the HTTP 429 response).
+    """
+
+    def __init__(self, message: str, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class GroqAuthError(Exception):
@@ -38,16 +56,68 @@ class LLMProvider(ABC):
     def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
         """Call the model and return a JSON-mode result."""
 
+    def complete_text(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        """
+        Call the model and return a free-form text result (no JSON mode).
+        Not every provider needs this (only the design writer uses it), so
+        it has a default instead of being an @abstractmethod -- that way
+        existing providers that only do extraction don't have to implement it.
+        """
+        raise NotImplementedError("This provider does not support complete_text")
+
 
 # ── Groq implementation ────────────────────────────────────────────────────────
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # How many times to retry after a 429 before giving up
-MAX_RATE_LIMIT_RETRIES = 2
+MAX_RATE_LIMIT_RETRIES = 3
 
-# Maximum seconds to wait on a single 429 retry-after header
-MAX_RETRY_WAIT = 60
+# Never block on one wait longer than this. If Groq asks for more than
+# this, we fail fast with RateLimitError instead of sleeping.
+MAX_RETRY_WAIT = 65
+
+# Groq's 429 error message looks like:
+#   "...Please try again in 14.7s." / "...in 2m5.3s." / "...in 1m."
+# Group 1 is minutes (optional), group 2 is seconds (optional).
+_RETRY_MESSAGE_RE = re.compile(r"try again in (?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?", re.IGNORECASE)
+
+# Used when neither the Retry-After header nor the message text gives us
+# a number -- not a "shorter fixed backoff" override, just a last resort.
+_FALLBACK_RETRY_SECONDS = 10.0
+
+# Used both as GroqProvider's default and as main.py's fallback when
+# reporting which model was used, so the two never drift apart.
+DEFAULT_GROQ_MODEL = "qwen/qwen3-27b"
+
+
+def _parse_retry_seconds(response: httpx.Response) -> float:
+    """
+    How long Groq actually asked us to wait, in seconds.
+    Prefers the Retry-After header; falls back to parsing the error
+    message text (e.g. "try again in 14.7s", "2m5.3s", or "1m").
+    Never returns or logs the message text itself -- only the number.
+    """
+    header = response.headers.get("retry-after")
+    if header is not None:
+        try:
+            return float(header)
+        except ValueError:
+            pass  # header wasn't a plain number -- fall through to the message
+
+    try:
+        body = response.json()
+        message = body.get("error", {}).get("message", "") if isinstance(body, dict) else ""
+    except Exception:
+        message = ""
+
+    match = _RETRY_MESSAGE_RE.search(message)
+    if match and (match.group(1) or match.group(2)):
+        minutes = int(match.group(1)) if match.group(1) else 0
+        seconds = float(match.group(2)) if match.group(2) else 0.0
+        return minutes * 60 + seconds
+
+    return _FALLBACK_RETRY_SECONDS
 
 
 class GroqProvider(LLMProvider):
@@ -59,7 +129,10 @@ class GroqProvider(LLMProvider):
                 "GROQ_API_KEY is not set. Add it to your .env file."
             )
         self._api_key = api_key
-        self._model = os.getenv("GROQ_MODEL", "qwen/qwen3-27b")
+        self._model = os.getenv("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+        # The design writer can use a different (e.g. higher-limit) model;
+        # extraction always uses GROQ_MODEL.
+        self._design_model = os.getenv("GROQ_DESIGN_MODEL", self._model)
 
     def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
         """
@@ -85,7 +158,36 @@ class GroqProvider(LLMProvider):
             # Force the model to output valid JSON
             "response_format": {"type": "json_object"},
         }
+        return self._post_chat_completion(payload)
 
+    def complete_text(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        """
+        Same as complete_json, but no JSON mode -- used for free-form
+        Markdown output (the design writer), not structured extraction.
+        """
+        payload = {
+            "model": self._design_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": max_tokens,
+            "reasoning_format": "hidden",
+            # No response_format here: we want Markdown prose, not JSON.
+        }
+        result = self._post_chat_completion(payload)
+        # Safety net, same as extraction.py's stripping for complete_json.
+        return LLMResult(
+            text=_strip_think_tags(result.text),
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+        )
+
+    def _post_chat_completion(self, payload: dict) -> LLMResult:
+        """
+        The retry/error-handling loop shared by complete_json and
+        complete_text. Only the payload (JSON mode or not) differs.
+        """
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -105,16 +207,31 @@ class GroqProvider(LLMProvider):
                 raise  # Same — let the caller handle it
 
             if response.status_code == 429:
-                # Respect the Retry-After header; default to 10 s if missing
-                retry_after = int(response.headers.get("retry-after", 10))
-                wait = min(retry_after, MAX_RETRY_WAIT)
+                requested = _parse_retry_seconds(response)
+
+                if requested > MAX_RETRY_WAIT:
+                    # Too long to block on -- fail fast instead of sleeping.
+                    raise RateLimitError(
+                        "Groq rate limit hit; requested wait is too long.",
+                        retry_after_seconds=requested,
+                    )
+
+                wait = min(requested + 1, MAX_RETRY_WAIT)  # +1s buffer, never a shorter guess
 
                 if attempt < MAX_RATE_LIMIT_RETRIES:
+                    # Numbers only in the log -- never the error message text.
+                    logger.info(
+                        "Groq 429: waiting %.1fs before attempt %d/%d",
+                        wait,
+                        attempt + 1,
+                        MAX_RATE_LIMIT_RETRIES,
+                    )
                     time.sleep(wait)
                     continue  # Try again
                 else:
                     raise RateLimitError(
-                        "Groq rate limit hit and retries exhausted."
+                        "Groq rate limit hit and retries exhausted.",
+                        retry_after_seconds=requested,
                     )
 
             if response.status_code in (401, 403):
