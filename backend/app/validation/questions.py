@@ -129,6 +129,12 @@ def build_validation_questions(
             "that the requirements do not state?"
         ),
     ))
+    questions.append(ValidationQuestion(
+        id="val_incoherent",
+        polarity="problem",
+        sections=[],
+        text="Does any section of the design contain unclear, nonsensical or meaningless text?",
+    ))
 
     return questions
 

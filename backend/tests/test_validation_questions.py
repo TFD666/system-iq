@@ -93,12 +93,13 @@ def test_val_decision_sections_use_the_fixed_map():
 
 # ── always-present "problem" templates ──────────────────────────────────────
 
-def test_five_problem_questions_are_always_present():
+def test_six_problem_questions_are_always_present():
+    # Was "five" -- val_incoherent was added as a 6th always-on problem question.
     questions = build_validation_questions(_make_requirements(), None)
     ids = _ids(questions)
     for expected in (
         "val_missing_component", "val_invented", "val_contradiction",
-        "val_unneeded_complexity", "val_scale_overclaim",
+        "val_unneeded_complexity", "val_scale_overclaim", "val_incoherent",
     ):
         assert expected in ids
 
@@ -110,6 +111,7 @@ def test_problem_questions_have_their_fixed_sections():
     assert by_id["val_contradiction"].sections == []
     assert by_id["val_unneeded_complexity"].sections == []
     assert by_id["val_scale_overclaim"].sections == [10]
+    assert by_id["val_incoherent"].sections == []
 
 
 def test_all_questions_are_noul_polarity_is_set():

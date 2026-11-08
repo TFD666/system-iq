@@ -458,6 +458,7 @@ VALIDATED_BODY = {
         "validation_input_tokens": 30,
         "validation_output_tokens": 10,
         "validation_status": "flagged",
+        "validation_model": "jev-1.13-free",
     },
     "design_markdown": "## 1. Architecture overview\n\nSome generated text.",
     "design_warnings": ["validation: val_contradiction"],
@@ -499,6 +500,55 @@ def test_validated_response_prints_validation_summary_line(tmp_path, capsys):
         send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
 
     out = capsys.readouterr().out
+    assert "validation: flagged, 2 Jev requests" in out
+
+
+# Was decision_model: on the real /validate endpoint decision_model is
+# always fixed to "n/a (validation only)", so the summary line must read
+# validation_model (falling back to decision_model only if that's absent).
+def test_validation_summary_line_says_fake_when_validation_model_is_fake(tmp_path, capsys):
+    fake_body = json.loads(json.dumps(VALIDATED_BODY))
+    fake_body["meta"]["validation_model"] = "fake (demo only)"
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, fake_body)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    out = capsys.readouterr().out
+    assert "validation: flagged (fake), 0 real Jev requests" in out
+
+
+def test_validation_summary_line_says_replayed_when_validation_model_is_replay(tmp_path, capsys):
+    replay_body = json.loads(json.dumps(VALIDATED_BODY))
+    replay_body["meta"]["validation_model"] = "replay (saved Jev output, not a live call)"
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, replay_body)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    out = capsys.readouterr().out
+    assert "validation: flagged (replayed), 0 real Jev requests" in out
+
+
+def test_validation_summary_line_falls_back_to_decision_model_if_validation_model_missing(tmp_path, capsys):
+    fake_body = json.loads(json.dumps(VALIDATED_BODY))
+    del fake_body["meta"]["validation_model"]
+    fake_body["meta"]["decision_model"] = "fake (demo only)"
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, fake_body)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    out = capsys.readouterr().out
+    assert "validation: flagged (fake), 0 real Jev requests" in out
+
+
+def test_validation_summary_line_says_real_jev_requests_otherwise(tmp_path, capsys):
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATED_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    out = capsys.readouterr().out
+    # jev-1.13-free is neither fake nor replay -- must show the real count.
+    assert "(fake)" not in out
+    assert "(replayed)" not in out
     assert "validation: flagged, 2 Jev requests" in out
 
 
@@ -813,6 +863,7 @@ VALIDATE_RESPONSE_BODY = {
         "validation_input_tokens": 10,
         "validation_output_tokens": 5,
         "validation_status": "passed",
+        "validation_model": "jev-1.13-free",
     },
     "design_markdown": "## 1. Architecture overview\n\nSome design text.",
     "design_warnings": [],

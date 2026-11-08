@@ -268,9 +268,21 @@ def _format_revisions_line(revisions: list[dict]) -> str | None:
 
 
 def _format_validation_summary_line(meta: dict) -> str | None:
+    """
+    Says what really ran: fake/replay decision providers never make a real
+    Jev call, so the line must say that instead of claiming real requests.
+    """
     status = meta.get("validation_status")
     if status is None:
         return None
+    # validation_model is the decision provider's label for the validation
+    # call itself; decision_model is fixed to "n/a (validation only)" on
+    # /validate, so fall back to it only if validation_model is missing.
+    decision_model_label = str(meta.get("validation_model") or meta.get("decision_model") or "").lower()
+    if "fake" in decision_model_label:
+        return f"validation: {status} (fake), 0 real Jev requests"
+    if "replay" in decision_model_label:
+        return f"validation: {status} (replayed), 0 real Jev requests"
     calls = meta.get("validation_calls") or 0
     return f"validation: {status}, {calls} Jev requests"
 

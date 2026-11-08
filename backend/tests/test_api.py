@@ -271,7 +271,7 @@ def test_invalid_stage_returns_422():
 # LOW forced probability means "flagged". Mirrors validation/policy.py.
 _PROBLEM_VAL_IDS = {
     "val_missing_component", "val_invented", "val_contradiction",
-    "val_unneeded_complexity", "val_scale_overclaim",
+    "val_unneeded_complexity", "val_scale_overclaim", "val_incoherent",
 }
 
 
@@ -340,6 +340,7 @@ def test_validate_stage_jev_call_counts_follow_max_revisions(max_revisions, expe
     assert body["stage"] == "validated"
     assert provider.decide_calls == expected_calls
     assert body["meta"]["validation_calls"] == expected_calls
+    assert body["meta"]["validation_model"] == "scripted"
     assert len(body["revisions"]) == min(max_revisions, expected_calls - 1)
 
 
@@ -365,6 +366,7 @@ def test_fake_mode_never_revises(monkeypatch):
     assert body["revisions"] == []
     assert body["meta"]["validation_status"] == "passed"
     assert all(r["status"] != "flagged" for r in body["validation"])
+    assert body["meta"]["validation_model"] == "fake (demo only)"
 
 
 def test_validation_rate_limit_still_returns_the_design_as_skipped():
@@ -375,6 +377,7 @@ def test_validation_rate_limit_still_returns_the_design_as_skipped():
     assert body["stage"] == "validated"
     assert body["design_markdown"]  # the design itself is still returned
     assert body["meta"]["validation_status"] == "skipped"
+    assert body["meta"]["validation_model"] is None  # never got a successful decide() call
     assert any("rate limited" in w for w in body["design_warnings"])
 
 

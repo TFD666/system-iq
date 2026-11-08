@@ -1,0 +1,55 @@
+{
+  "v00_base": {
+    "expected_flagged": [],
+    "description": "Unchanged base design; nothing should be flagged."
+  },
+  "v01_missing_component": {
+    "expected_flagged": [
+      "val_missing_component"
+    ],
+    "description": "Removes the venue-data-source component; the map provider stays."
+  },
+  "v02_invented_feature": {
+    "expected_flagged": [
+      "val_invented"
+    ],
+    "description": "Adds push notifications, reviews, and ratings -- none were requested."
+  },
+  "v03_decision_violated_api": {
+    "expected_flagged": [
+      "val_decision_api_style"
+    ],
+    "description": "Switches the API style to GraphQL, contradicting the accepted REST decision."
+  },
+  "v04_decision_violated_db": {
+    "expected_flagged": [
+      "val_decision_primary_database"
+    ],
+    "description": "Swaps PostGIS for MongoDB, contradicting the accepted database decision."
+  },
+  "v05_scale_overclaim": {
+    "expected_flagged": [
+      "val_scale_overclaim"
+    ],
+    "description": "Claims specific user/traffic numbers the requirements never stated."
+  },
+  "v06_complexity": {
+    "expected_flagged": [
+      "val_unneeded_complexity",
+      "val_decision_architecture_style"
+    ],
+    "description": "Adds a 12-microservice/Kubernetes/Kafka architecture, contradicting the decided monolith and overcomplicating the design."
+  },
+  "v07_contradiction": {
+    "expected_flagged": [
+      "val_contradiction"
+    ],
+    "description": "Claims horizontal scaling is required, contradicting section 10's earlier statement that it is not."
+  },
+  "v08_incoherent": {
+    "expected_flagged": [
+      "val_incoherent"
+    ],
+    "description": "Replaces the authentication section with nonsensical text."
+  }
+}

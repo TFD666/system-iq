@@ -142,6 +142,7 @@ class ValidationRunResult:
     input_tokens: int = 0
     output_tokens: int = 0
     status: str = "passed"
+    model: str | None = None  # decision provider's model label for the validation call
 
 
 def run_validation_loop(
@@ -193,6 +194,7 @@ def run_validation_loop(
         run.calls += 1
         run.input_tokens += result_set.input_tokens
         run.output_tokens += result_set.output_tokens
+        run.model = result_set.model
 
         run.results = [
             apply_validation_policy(q, result_set.decisions[q.id]) for q in validation_questions
@@ -418,6 +420,7 @@ def design(
     meta_kwargs["validation_input_tokens"] = run.input_tokens
     meta_kwargs["validation_output_tokens"] = run.output_tokens
     meta_kwargs["validation_status"] = run.status
+    meta_kwargs["validation_model"] = run.model
 
     return DesignResponse(
         stage="validated",
@@ -462,6 +465,7 @@ def validate_design(
         validation_input_tokens=run.input_tokens,
         validation_output_tokens=run.output_tokens,
         validation_status=run.status,
+        validation_model=run.model,
     )
 
     return DesignResponse(

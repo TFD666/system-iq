@@ -84,7 +84,7 @@ class EchoLLM(LLMProvider):
 
 _PROBLEM_VAL_IDS = {
     "val_missing_component", "val_invented", "val_contradiction",
-    "val_unneeded_complexity", "val_scale_overclaim",
+    "val_unneeded_complexity", "val_scale_overclaim", "val_incoherent",
 }
 
 
@@ -145,6 +145,7 @@ def test_max_revisions_zero_makes_no_llm_call_and_exactly_one_provider_request()
     assert body["stage"] == "validated"
     assert provider.calls == 1
     assert body["meta"]["validation_calls"] == 1
+    assert body["meta"]["validation_model"] == "scripted"
     assert body["revisions"] == []
 
 
@@ -193,6 +194,7 @@ def test_rate_limit_during_validation_returns_skipped_not_an_error():
     assert response.status_code == 200
     body = response.json()
     assert body["meta"]["validation_status"] == "skipped"
+    assert body["meta"]["validation_model"] is None  # never got a successful decide() call
     assert any("rate limited" in w for w in body["design_warnings"])
     assert body["design_markdown"]  # markdown still comes back, unmodified
 

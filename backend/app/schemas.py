@@ -220,6 +220,10 @@ class DecisionMeta(BaseModel):
     validation_input_tokens: int | None = None
     validation_output_tokens: int | None = None
     validation_status: str | None = None  # "passed" | "flagged" | "skipped"
+    # The decision provider's model label for the validation call itself.
+    # decision_model is fixed to "n/a (validation only)" for /validate, so
+    # this is what callers must check to tell a real Jev run from fake/replay.
+    validation_model: str | None = None
 
 
 class DesignResponse(BaseModel):
