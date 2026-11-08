@@ -1,0 +1,1 @@
+A to-do app that works offline on phones and syncs across devices when online. Users can share lists with family members. Expect about 10,000 users.

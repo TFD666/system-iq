@@ -409,6 +409,7 @@ def send_to_backend(
     out_path: str | None = None,
     force: bool = False,
     max_revisions: int = 1,
+    mode: str = "pipeline",
 ) -> None:
     """
     POST the validated (and possibly redacted) idea text to the backend
@@ -432,7 +433,7 @@ def send_to_backend(
     try:
         response = httpx.post(
             url,
-            json={"idea": text, "stage": stage, "max_revisions": max_revisions},
+            json={"idea": text, "stage": stage, "max_revisions": max_revisions, "mode": mode},
             timeout=timeout,
         )
 
@@ -708,6 +709,13 @@ def main():
         help="How many revise-then-revalidate rounds the validate stage may use (default: 1)",
     )
     parser.add_argument(
+        "--mode",
+        choices=["pipeline", "llm_only"],
+        default="pipeline",
+        help="pipeline (default): extract+decide+design+validate. "
+             "llm_only: design with no Jev decisions at all (baseline)",
+    )
+    parser.add_argument(
         "--no-validate",
         action="store_true",
         help="Stop at the design stage; skip Jev validation",
@@ -803,6 +811,7 @@ def main():
         out_path=args.out,
         force=args.force,
         max_revisions=args.max_revisions,
+        mode=args.mode,
     )
 
 

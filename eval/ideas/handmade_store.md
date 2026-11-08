@@ -1,0 +1,1 @@
+An online store for handmade goods from about 200 sellers. Buyers browse and search products with photos, pay by card, and track orders. Sellers manage listings and payouts. Peak traffic of about 500 requests per second during sales. The budget is small and the team is two developers.

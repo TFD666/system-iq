@@ -1,0 +1,1 @@
+A mobile app for a college club to post events, let members RSVP, and send announcements to all members. About 800 members, mostly active during event weeks.

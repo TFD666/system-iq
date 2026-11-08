@@ -1,0 +1,1 @@
+A web app for a small clinic where patients book appointments online and receive reminders by email or SMS, and doctors manage their daily schedule. About 5 doctors and 300 patients.

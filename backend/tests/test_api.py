@@ -381,6 +381,42 @@ def test_validation_rate_limit_still_returns_the_design_as_skipped():
     assert any("rate limited" in w for w in body["design_warnings"])
 
 
+class _ExplodingDecisionProvider(DecisionProvider):
+    """Fails the test if .decide() is ever called -- used to prove llm_only
+    makes zero decision-provider requests."""
+    def decide(self, state, questions) -> DecisionResultSet:
+        raise AssertionError("decision provider must not be called in llm_only mode")
+
+
+def test_llm_only_mode_makes_no_decision_provider_request():
+    client = make_client_with_decision(GoodProviderWithDesign(), _ExplodingDecisionProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "mode": "llm_only"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage"] == "designed"
+    assert body["decisions"] is None
+    assert body["meta"]["decision_model"] == "none (llm-only baseline)"
+    assert body["meta"]["validation_calls"] is None
+    assert body["meta"]["validation_status"] is None
+    assert body["meta"]["llm_model"]
+    assert body["meta"]["design_group_stats"]
+
+
+def test_llm_only_mode_response_shape_matches_pipeline_designed_stage():
+    # Same response shape as a normal "designed" stage response, modulo meta.
+    client = make_client(GoodProviderWithDesign())
+    pipeline_response = client.post(
+        "/design", json={"idea": "Build a to-do app", "stage": "design"}
+    )
+    llm_only_response = client.post(
+        "/design", json={"idea": "Build a to-do app", "mode": "llm_only", "stage": "validate"}
+    )
+    assert set(pipeline_response.json().keys()) == set(llm_only_response.json().keys())
+    # mode=llm_only always stops at "designed" even if stage asked for more.
+    assert llm_only_response.json()["stage"] == "designed"
+
+
 def test_no_validation_text_or_design_text_in_logs(caplog):
     import logging
     provider = AlwaysFlagValidationDecisionProvider()

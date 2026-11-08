@@ -1,0 +1,3 @@
+I was having another idea, which was kind of a funny idea but still an idea is an idea. The idea is that every new drinker likes to make new things and try new things, like make a new type of mojito or anything. What traditionally people do is use water with it or use soda with it.
+
+Just to elevate this idea I was thinking of making an app that would suggest different types of combinations to the user based on what type of drink he is having. If he is having a light beer, amoyto, or anything else, the app would suggest to the user what other things he can make with the least ingredients that he has. The app would also suggest that he buy new ingredients that would suit the user's taste.

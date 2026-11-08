@@ -600,6 +600,38 @@ def test_max_revisions_flag_is_sent_to_backend_payload():
     assert captured_payload.get("max_revisions") == 2
 
 
+def test_mode_flag_defaults_to_pipeline():
+    from systemiq import main
+
+    captured_payload = {}
+
+    def capture_post(url, *, json, **kwargs):
+        captured_payload.update(json)
+        return make_response(200, SUCCESS_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", ["systemiq", "Build a to-do app"]):
+            main()
+
+    assert captured_payload.get("mode") == "pipeline"
+
+
+def test_mode_flag_llm_only_is_sent_to_backend_payload():
+    from systemiq import main
+
+    captured_payload = {}
+
+    def capture_post(url, *, json, **kwargs):
+        captured_payload.update(json)
+        return make_response(200, SUCCESS_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", ["systemiq", "Build a to-do app", "--mode", "llm_only"]):
+            main()
+
+    assert captured_payload.get("mode") == "llm_only"
+
+
 def test_no_validate_flag_stops_at_design_stage():
     from systemiq import main
 

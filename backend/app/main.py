@@ -279,6 +279,35 @@ def design(
     if request.stage == "extract":
         return DesignResponse(stage="extracted", requirements=requirements)
 
+    # ── llm_only baseline: design with no decisions at all, no Jev call ─────
+    if request.mode == "llm_only":
+        design_result = write_design(requirements, None, llm, TokenBudget())
+        return DesignResponse(
+            stage="designed",
+            requirements=requirements,
+            decisions=None,
+            meta=DecisionMeta(
+                decision_model="none (llm-only baseline)",
+                input_tokens=0,
+                output_tokens=0,
+                llm_model=os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL),
+                design_prompt_tokens=design_result.prompt_tokens,
+                design_completion_tokens=design_result.completion_tokens,
+                design_group_stats=[
+                    DesignGroupStat(
+                        id=stat.id,
+                        prompt_tokens=stat.prompt_tokens,
+                        completion_tokens=stat.completion_tokens,
+                        retries=stat.retries,
+                        elapsed_seconds=stat.elapsed_seconds,
+                    )
+                    for stat in design_result.group_stats
+                ],
+            ),
+            design_markdown=design_result.markdown,
+            design_warnings=design_result.warnings,
+        )
+
     # ── Step 2: build state and questions from requirements ─────────────────
     state = build_state(requirements)
     questions = build_questions(requirements)

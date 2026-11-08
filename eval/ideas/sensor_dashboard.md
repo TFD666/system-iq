@@ -1,0 +1,1 @@
+A dashboard that shows live temperature and humidity readings from about 50 sensors in a warehouse and alerts staff when a reading goes out of range.

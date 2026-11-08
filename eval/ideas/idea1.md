@@ -1,0 +1,5 @@
+Workstation operating system idea: the user will have a container-type system in which he would be able to open applications in a flash just by clicking the application and starting an engine.
+
+I was thinking: let's say I am working on a project. I have done my work for the day, closed all the applications, the nodes, everything (Docker, Beat, Spotify Beat, anything regarding that work), and shut off my laptop. When I open my device on the next day, I would be doing all the things: opening all the nodes, all the Docker, all the tables, and everything once again.
+
+What I was thinking is that by clicking on the application just once, I would be able to run all the prerequisites that I need to do that work. That means, just by clicking on my application once, I would be able to open Spotify and all the previous tabs that I left. All the Antigravity and talker extensions, all the tables, all the servers would be running and everything. 

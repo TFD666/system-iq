@@ -36,6 +36,10 @@ class DesignRequest(BaseModel):
     stage: Literal["extract", "decide", "design", "validate"] = "validate"
     # How many revise-then-revalidate rounds the validate stage may use.
     max_revisions: int = Field(default=1, ge=0, le=2)
+    # "pipeline" (default): extraction -> Jev decisions -> design -> validate.
+    # "llm_only": extraction -> design with no decisions at all (no Jev call),
+    # used as a baseline. Always stops at stage "designed" regardless of `stage`.
+    mode: Literal["pipeline", "llm_only"] = "pipeline"
 
 
 class ExpectedScale(BaseModel):
