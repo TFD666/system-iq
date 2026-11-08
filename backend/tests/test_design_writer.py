@@ -261,6 +261,7 @@ def test_group_stats_are_present_and_numeric():
         assert stat.completion_tokens == 20
         assert stat.retries == 0  # FakeLLM's canned text passes validation first try
         assert stat.elapsed_seconds == 0.0  # fixed fake clock
+        assert stat.retry_reasons == []  # no retry -> no reasons
 
 
 # ── per-group quality gate: retry / fallback / status-word safety net ──────────
@@ -322,6 +323,7 @@ def test_group_with_missing_heading_triggers_exactly_one_retry():
     assert stats.retries == 1
     assert "## 2. Test Heading Two" in markdown
     assert warnings == []  # the retry succeeded -- no fallback needed
+    assert stats.retry_reasons == ["missing_heading"]  # category word, never prose
 
 
 def test_group_with_placeholder_text_triggers_retry():
@@ -342,6 +344,7 @@ def test_group_with_placeholder_text_triggers_retry():
     assert stats.retries == 1
     assert "TBD" not in markdown
     assert warnings == []
+    assert stats.retry_reasons == ["placeholder"]
 
 
 def test_still_bad_group_gets_fallback_line_and_warning():
@@ -358,6 +361,26 @@ def test_still_bad_group_gets_fallback_line_and_warning():
     assert writer_module.FALLBACK_LINE in markdown
     assert any("## 2. Test Heading Two" in w for w in warnings)
     assert any("missing heading" in w for w in warnings)
+    assert stats.retry_reasons == ["missing_heading"]  # reasons from the pre-retry failure
+
+
+def test_retry_reasons_lists_one_category_word_per_failed_check():
+    # Heading 1 too short AND heading 2 missing -- both failures land in
+    # retry_reasons, as category words only (never the retry_text prose).
+    first_try = "## 1. Test Heading One\n" + " ".join(["word"] * 5)  # too short, heading 2 missing
+    second_try = "\n\n".join(
+        _long_enough_body(h) for h in ["## 1. Test Heading One", "## 2. Test Heading Two"]
+    )
+    llm = ScriptedLLM([first_try, second_try])
+
+    _markdown, _warnings, stats = writer_module._write_one_group(
+        _TEST_GROUP, "user message", llm, _group_budget(), 700, False, None, lambda: 0.0
+    )
+
+    assert stats.retries == 1
+    assert sorted(stats.retry_reasons) == ["missing_heading", "too_short"]
+    for reason in stats.retry_reasons:
+        assert " " not in reason  # category words only, never prose with spaces
 
 
 def test_ordinary_status_words_are_never_rewritten():
@@ -555,6 +578,54 @@ def test_assumptions_section_structure_for_a_mixed_set_of_decisions():
         assert raw_id not in section
     for raw_status in ("accepted", "tentative", "uncertain", "needs_review"):
         assert raw_status not in section.lower()
+
+
+def test_assumptions_section_omits_empty_subsections_when_some_have_entries():
+    # Was: every empty subsection printed "- None." / "- None yet." -- now
+    # an empty subsection is omitted entirely rather than printed as filler.
+    decisions = [
+        _make_decision(id="api_style", status="accepted", choice="REST", probability=0.9),
+    ]
+    requirements = _make_requirements(
+        expected_scale=ExpectedScale(users="1000", peak_requests_per_second="10", data_volume="1GB"),
+    )  # no unspecified fields this decision depends on, no unknowns
+
+    section = writer_module._build_assumptions_section(requirements, decisions)
+
+    assert "### Decided" in section
+    assert "- None." not in section
+    assert "- None yet." not in section
+    assert "### Proposed, to be confirmed" not in section
+    assert "### Unclear" not in section
+    assert "### Depends on unspecified requirements" not in section
+    assert "### Other open questions" not in section
+
+
+def test_assumptions_section_all_empty_prints_the_single_fallback_line():
+    requirements = _make_requirements()  # nothing unspecified, no unknowns
+    section = writer_module._build_assumptions_section(requirements, decisions=[])
+
+    assert section == f"{ASSUMPTIONS_HEADING}\n\nNo open questions were recorded."
+
+
+def test_assumptions_section_llm_only_lists_unspecified_fields_and_unknowns():
+    # llm_only mode (decisions=None): no decisions exist to say "affects X",
+    # so unspecified fields are listed directly, same subsection headings
+    # as pipeline mode.
+    requirements = _make_requirements(
+        authentication=None, unknowns=["payments not specified"],
+    )
+
+    section = writer_module._build_assumptions_section(requirements, decisions=None)
+
+    assert "### Depends on unspecified requirements" in section
+    assert "- Authentication" in section
+    assert "affects" not in section  # no decisions to attribute it to
+    assert "### Other open questions" in section
+    assert "payments not specified" in section
+    assert "### Decided" not in section
+    assert "### Proposed, to be confirmed" not in section
+    assert "### Unclear" not in section
 
 
 def test_no_idea_text_or_design_text_in_logs(caplog):

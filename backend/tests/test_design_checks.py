@@ -70,3 +70,32 @@ def test_warnings_contain_only_ids_and_headings_no_prose():
     warnings = check_design(markdown, decisions=[decision])
     for warning in warnings:
         assert "Some prose the LLM wrote" not in warning
+
+
+def test_repetition_check_ignores_section_13_entirely():
+    # Section 13 is code-built (never LLM prose); a duplicate "- None."
+    # style line there must never be flagged as repetition.
+    markdown = GOOD_MARKDOWN.replace(
+        "## 13. Assumptions and open questions",
+        "## 13. Assumptions and open questions\n- Some bullet.\n- Some bullet.",
+    )
+    assert check_design(markdown, decisions=None) == []
+
+
+def test_repetition_check_ignores_bullets_that_are_only_none():
+    # "- None" / "None" lines repeating are not real content, so they must
+    # never be flagged as repetition, in any (non-13) section.
+    markdown = GOOD_MARKDOWN.replace(
+        "## 1. Architecture overview",
+        "## 1. Architecture overview\n- None\n- None\nNone\nNone",
+    )
+    assert check_design(markdown, decisions=None) == []
+
+
+def test_repetition_check_still_flags_a_real_duplicate_bullet():
+    markdown = GOOD_MARKDOWN.replace(
+        "## 1. Architecture overview",
+        "## 1. Architecture overview\n- Use caching for speed.\n- Use caching for speed.",
+    )
+    warnings = check_design(markdown, decisions=None)
+    assert any(w.startswith("repetition:") for w in warnings)

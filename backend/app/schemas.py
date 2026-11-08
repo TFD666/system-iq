@@ -186,6 +186,10 @@ class DesignGroupStat(BaseModel):
     completion_tokens: int
     retries: int
     elapsed_seconds: float
+    # Short category words only (e.g. "too_short", "jargon") -- never prose
+    # or model output. One per failed check that triggered the retry;
+    # empty when retries == 0.
+    retry_reasons: list[str] = Field(default_factory=list)
 
 
 class ValidationResultOut(BaseModel):

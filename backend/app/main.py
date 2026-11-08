@@ -300,6 +300,7 @@ def design(
                         completion_tokens=stat.completion_tokens,
                         retries=stat.retries,
                         elapsed_seconds=stat.elapsed_seconds,
+                        retry_reasons=stat.retry_reasons,
                     )
                     for stat in design_result.group_stats
                 ],

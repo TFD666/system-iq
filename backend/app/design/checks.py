@@ -9,7 +9,7 @@ against, never copied out.
 
 import re
 
-from .sections import MAX_WORDS_PER_SECTION, all_headings
+from .sections import ASSUMPTIONS_HEADING, MAX_WORDS_PER_SECTION, all_headings
 
 # Matches the language tag on an OPENING fenced code block, e.g. "```python".
 # (A closing "```" has no language tag, which is allowed, so it never matches.)
@@ -130,10 +130,16 @@ def _check_section_lengths(markdown: str) -> list[str]:
 def _check_repeated_lines(markdown: str) -> list[str]:
     # Catches a bullet or sentence that exactly restates an earlier one in
     # the same section (padding-by-repetition instead of real content).
-    headings = all_headings()
-    bodies = split_into_sections(markdown, headings)
+    # Section 13 is code-built (never LLM prose), so it's never checked --
+    # and its "- None." placeholder lines are not repetition either way.
+    # Split against ALL headings (so section 13 still marks where section
+    # 12's body ends), then simply skip it when generating warnings.
+    all_heads = all_headings()
+    bodies = split_into_sections(markdown, all_heads)
     warnings: list[str] = []
-    for heading in headings:
+    for heading in all_heads:
+        if heading == ASSUMPTIONS_HEADING:
+            continue
         body = bodies.get(heading)
         if not body:
             continue
@@ -143,7 +149,7 @@ def _check_repeated_lines(markdown: str) -> list[str]:
             if stripped.startswith("```"):
                 continue  # fence delimiters legitimately repeat; not real content
             key = stripped.lstrip("-*•").strip().lower()
-            if not key:
+            if not key or key == "none":
                 continue
             if key in seen:
                 warnings.append(f"repetition: {heading}")

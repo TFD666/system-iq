@@ -51,6 +51,15 @@ _ATTACHED_UNITS = ("ms", "gb", "mb", "tb")
 _WORD_UNITS = ("users", "requests", "rps", "percent")
 _NUMBER_RE = re.compile(r"\d[\d,]*\.?\d*")
 _ASSUMPTION_TOKENS = ("unspecified", "not specified", "not stated", "assum")
+_LEAK_PHRASES = ("decisions are provided", "no decisions", "decisions were provided")
+
+
+def _retry_reason_counts(group_stats: list) -> dict:
+    counts: dict[str, int] = {}
+    for stat in group_stats:
+        for reason in stat.get("retry_reasons") or []:
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
 
 
 def _read_json_bom(path: Path) -> dict:
@@ -160,11 +169,14 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
     )
 
     assumption_mentions = sum(sections_text_lower.count(tok) for tok in _ASSUMPTION_TOKENS)
+    leak_hits = sum(sections_text_lower.count(p) for p in _LEAK_PHRASES)
 
     tech_choices = _tech_choices(sections_text)
 
     group_stats = meta.get("design_group_stats") or []
     elapsed_seconds = sum(stat.get("elapsed_seconds") or 0 for stat in group_stats)
+    retries = sum(stat.get("retries") or 0 for stat in group_stats)
+    retry_reason_counts = _retry_reason_counts(group_stats)
 
     if version == "B":
         decision_adherence = _decision_adherence(body.get("decisions"), markdown)
@@ -196,6 +208,9 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
         "tech_choices": tech_choices,
         "unsupported_numbers": unsupported_numbers,
         "assumption_mentions": assumption_mentions,
+        "leak_hits": leak_hits,
+        "retries": retries,
+        "retry_reason_counts": retry_reason_counts,
         "design_prompt_tokens": meta.get("design_prompt_tokens") or 0,
         "design_completion_tokens": meta.get("design_completion_tokens") or 0,
         "elapsed_seconds": elapsed_seconds,
@@ -211,7 +226,8 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
 
 _NUMERIC_METRIC_KEYS = (
     "sections_found", "fallback_lines", "design_warnings", "placeholder_hits", "jargon_hits",
-    "unsupported_numbers", "assumption_mentions", "design_prompt_tokens", "design_completion_tokens",
+    "unsupported_numbers", "assumption_mentions", "leak_hits", "retries",
+    "design_prompt_tokens", "design_completion_tokens",
     "elapsed_seconds", "jev_requests", "jev_input_tokens", "jev_output_tokens",
     "flagged_count", "possible_count",
 )
@@ -253,6 +269,12 @@ def score(ideas_dir: Path = DEFAULT_IDEAS_DIR, runs_dir: Path = RUNS_DIR) -> dic
             aggregate[version][key] = _mean([r[key] for r in version_runs])
         adherence_values = [r["decision_adherence"] for r in version_runs if isinstance(r["decision_adherence"], (int, float))]
         aggregate[version]["decision_adherence"] = _mean(adherence_values) if adherence_values else "n/a"
+
+        retry_reason_totals: dict[str, int] = {}
+        for r in version_runs:
+            for category, count in r["retry_reason_counts"].items():
+                retry_reason_totals[category] = retry_reason_totals.get(category, 0) + count
+        aggregate[version]["retry_reason_totals"] = retry_reason_totals
 
     consistency = {}
     for (idea, version), group in sorted(by_idea_version.items()):
@@ -303,17 +325,17 @@ def render_report(data: dict) -> str:
         lines.append(f"### {idea}")
         lines.append("")
         lines.append("| version | repeat | sections_found | fallback_lines | warnings | "
-                      "placeholder_hits | jargon_hits | decision_adherence | unsupported_numbers | "
-                      "assumption_mentions | tech_choices | jev_requests |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+                      "placeholder_hits | jargon_hits | leak_hits | retries | decision_adherence | "
+                      "unsupported_numbers | assumption_mentions | tech_choices | jev_requests |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for version in ("A", "B"):
             for r in data["by_idea_version"].get((idea, version), []):
                 tech = ", ".join(f"{k}={v}" for k, v in r["tech_choices"].items())
                 lines.append(
                     f"| {r['version']} | {r['repeat']} | {r['sections_found']} | {r['fallback_lines']} | "
                     f"{r['design_warnings']} | {r['placeholder_hits']} | {r['jargon_hits']} | "
-                    f"{_fmt(r['decision_adherence'])} | {r['unsupported_numbers']} | "
-                    f"{r['assumption_mentions']} | {tech} | {r['jev_requests']} |"
+                    f"{r['leak_hits']} | {r['retries']} | {_fmt(r['decision_adherence'])} | "
+                    f"{r['unsupported_numbers']} | {r['assumption_mentions']} | {tech} | {r['jev_requests']} |"
                 )
         lines.append("")
 
@@ -329,6 +351,22 @@ def render_report(data: dict) -> str:
     lines.append(
         f"| decision_adherence | n/a | {_fmt(data['aggregate']['B'].get('decision_adherence', 'n/a'))} |"
     )
+    lines.append("")
+
+    lines.append("## Retry reasons (sum per category)")
+    lines.append("")
+    all_categories = sorted(
+        set(data["aggregate"]["A"]["retry_reason_totals"]) | set(data["aggregate"]["B"]["retry_reason_totals"])
+    )
+    if not all_categories:
+        lines.append("No retries were recorded.")
+    else:
+        lines.append("| category | A | B |")
+        lines.append("|---|---|---|")
+        for category in all_categories:
+            a_total = data["aggregate"]["A"]["retry_reason_totals"].get(category, 0)
+            b_total = data["aggregate"]["B"]["retry_reason_totals"].get(category, 0)
+            lines.append(f"| {category} | {a_total} | {b_total} |")
     lines.append("")
 
     lines.append("## Consistency across repeats (fraction of tech categories identical)")

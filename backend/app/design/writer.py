@@ -26,7 +26,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..decision.questions import build_questions
 from ..extraction import _build_deterministic_unknowns
@@ -57,6 +57,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_TOKENS_PER_GROUP = 700
 
 FALLBACK_LINE = "This section could not be generated."
+
+# Short category words for meta.design_group_stats.retry_reasons -- never
+# the prose category string, which could be mistaken for model output.
+_RETRY_REASON_WORDS = {
+    "missing heading": "missing_heading",
+    "section too short": "too_short",
+    "placeholder text": "placeholder",
+    "invented deadline": "deadline",
+    "leftover jargon": "jargon",
+    "wrong 'chosen by the model' phrase": "model_chosen_phrase",
+    "headings out of order": "order",
+}
 
 # Words that signal a guessed platform when app_type is unspecified.
 _PLATFORM_WORD_RE = re.compile(r"\b(mobile|web app|ios|android)\b", re.IGNORECASE)
@@ -157,6 +169,7 @@ class GroupStats:
     completion_tokens: int
     retries: int
     elapsed_seconds: float
+    retry_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -442,12 +455,14 @@ def _unclear_bullet(decision: DecisionResultOut) -> str:
 
 
 def _unspecified_requirements_bullets(
-    requirements: Requirements, decisions: list[DecisionResultOut]
+    requirements: Requirements, decisions: list[DecisionResultOut], llm_only: bool = False
 ) -> list[str]:
     """
     One bullet per requirement field that's null (or, for expected_scale,
     fully unspecified), naming which decisions depend on it -- reusing
     build_questions() so this never has to duplicate its depends_on table.
+    llm_only (no decisions at all) lists every unspecified field directly,
+    since there are no decisions to name as "affects".
     """
     questions_by_id = {q.id: q for q in build_questions(requirements)}
 
@@ -466,13 +481,16 @@ def _unspecified_requirements_bullets(
 
     bullets = []
     for field in unspecified_fields:
+        field_label = field.replace("_", " ").capitalize()
+        if llm_only:
+            bullets.append(f"- {field_label}")
+            continue
         dependent_ids = [
             decision.id for decision in decisions
             if decision.id in questions_by_id and field in questions_by_id[decision.id].depends_on
         ]
         if not dependent_ids:
             continue
-        field_label = field.replace("_", " ").capitalize()
         dependent_labels = ", ".join(_label_for(i) for i in dependent_ids)
         bullets.append(f"- {field_label}: affects {dependent_labels}")
 
@@ -486,6 +504,7 @@ def _build_assumptions_section(
     Section 13, built in Python (never by the LLM), grouped into plain
     sub-sections. Never prints a raw status word or a decision id.
     """
+    llm_only = decisions is None
     decisions = decisions or []
 
     decided = [d for d in decisions if d.status in ("accepted", "yes", "no")]
@@ -495,16 +514,22 @@ def _build_assumptions_section(
     deterministic_unknowns = set(_build_deterministic_unknowns(requirements))
     other_unknowns = [u for u in requirements.unknowns if u not in deterministic_unknowns]
 
-    parts = [
-        ASSUMPTIONS_HEADING,
-        "### Decided\n" + ("\n".join(_decided_bullet(d) for d in decided) or "- None yet."),
-        "### Proposed, to be confirmed\n"
-        + ("\n".join(_proposed_bullet(d) for d in proposed) or "- None."),
-        "### Unclear\n" + ("\n".join(_unclear_bullet(d) for d in unclear) or "- None."),
-        "### Depends on unspecified requirements\n"
-        + ("\n".join(_unspecified_requirements_bullets(requirements, decisions)) or "- None."),
-        "### Other open questions\n"
-        + ("\n".join(f"- {u}" for u in other_unknowns) or "- None."),
+    subsections = [
+        ("### Decided", [_decided_bullet(d) for d in decided]),
+        ("### Proposed, to be confirmed", [_proposed_bullet(d) for d in proposed]),
+        ("### Unclear", [_unclear_bullet(d) for d in unclear]),
+        (
+            "### Depends on unspecified requirements",
+            _unspecified_requirements_bullets(requirements, decisions, llm_only),
+        ),
+        ("### Other open questions", [f"- {u}" for u in other_unknowns]),
+    ]
+    non_empty = [(heading, bullets) for heading, bullets in subsections if bullets]
+    if not non_empty:
+        return ASSUMPTIONS_HEADING + "\n\nNo open questions were recorded."
+
+    parts = [ASSUMPTIONS_HEADING] + [
+        heading + "\n" + "\n".join(bullets) for heading, bullets in non_empty
     ]
     return "\n\n".join(parts)
 
@@ -539,8 +564,14 @@ def _write_one_group(
     logger.info("design: writing section group '%s'", group["id"])
     text = _call(user_message)
     bad = _validate_group(group, text, decisions_present)
+    retry_reasons: list[str] = []
 
     if bad:
+        retry_reasons = [
+            _RETRY_REASON_WORDS.get(problem["category"], "other")
+            for problems in bad.values()
+            for problem in problems
+        ]
         logger.info(
             "design: group '%s' failed validation (%d heading(s)); retrying",
             group["id"],
@@ -566,6 +597,7 @@ def _write_one_group(
         completion_tokens=completion_tokens,
         retries=retries,
         elapsed_seconds=round(clock() - start, 3),
+        retry_reasons=retry_reasons,
     )
     return markdown, fallback_warnings, stats
 

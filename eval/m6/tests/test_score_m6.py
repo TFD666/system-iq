@@ -12,7 +12,7 @@ def _headings_markdown(sections: dict, include_13=True) -> str:
     for n in range(1, 13):
         parts.append(sm.all_headings()[n - 1] + "\n\n" + sections.get(n, "Some generic text here."))
     if include_13:
-        parts.append(sm.all_headings()[12] + "\n\nAssumptions text.")
+        parts.append(sm.all_headings()[12] + "\n\n" + sections.get(13, "Assumptions text."))
     return "\n\n".join(parts)
 
 
@@ -117,6 +117,63 @@ def test_assumption_mentions_counts_the_four_tokens():
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
     result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
     assert result["assumption_mentions"] == 4
+
+
+def test_leak_hits_counts_the_three_phrases_in_sections_1_to_12():
+    markdown = _headings_markdown({
+        1: "Decisions are provided for this project.",
+        2: "There are no decisions here.",
+        13: "No decisions were provided in this run.",  # section 13 -- must not count
+    }, include_13=True)
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["leak_hits"] == 2
+
+
+def test_retries_and_retry_reason_counts_come_from_group_stats():
+    markdown = _headings_markdown({})
+    meta = {
+        "design_group_stats": [
+            {"id": "g1", "retries": 1, "retry_reasons": ["too_short", "jargon"]},
+            {"id": "g2", "retries": 0, "retry_reasons": []},
+            {"id": "g3", "retries": 1, "retry_reasons": ["too_short"]},
+        ],
+    }
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": meta, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["retries"] == 2
+    assert result["retry_reason_counts"] == {"too_short": 2, "jargon": 1}
+
+
+def test_retries_are_zero_and_empty_when_no_group_had_a_retry():
+    markdown = _headings_markdown({})
+    meta = {"design_group_stats": [{"id": "g1", "retries": 0, "retry_reasons": []}]}
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": meta, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["retries"] == 0
+    assert result["retry_reason_counts"] == {}
+
+
+def test_aggregate_sums_retry_reason_totals_per_category_across_runs(_env):
+    ideas_dir, runs_dir = _env
+    body_1 = {
+        "design_markdown": _headings_markdown({}), "design_warnings": [], "requirements": {},
+        "meta": {"llm_model": "x", "design_group_stats": [
+            {"elapsed_seconds": 1.0, "retries": 1, "retry_reasons": ["too_short"]},
+        ]},
+    }
+    body_2 = {
+        "design_markdown": _headings_markdown({}), "design_warnings": [], "requirements": {},
+        "meta": {"llm_model": "x", "design_group_stats": [
+            {"elapsed_seconds": 1.0, "retries": 1, "retry_reasons": ["too_short", "jargon"]},
+        ]},
+    }
+    _write_run(runs_dir, "idea1__A__r1", {"idea": "idea1", "version": "A", "repeat": 1}, body_1)
+    _write_run(runs_dir, "idea1__A__r2", {"idea": "idea1", "version": "A", "repeat": 2}, body_2)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir)
+
+    assert data["aggregate"]["A"]["retry_reason_totals"] == {"too_short": 2, "jargon": 1}
 
 
 def test_cost_and_time_for_version_a_has_zero_jev_requests():
