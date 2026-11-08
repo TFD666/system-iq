@@ -1,5 +1,6 @@
 import logging
 import os
+from dataclasses import dataclass, field
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -16,6 +17,7 @@ from .schemas import (
     DesignRequest,
     DesignResponse,
     RevisionRoundOut,
+    ValidateRequest,
     ValidationResultOut,
 )
 from .decision.provider import (
@@ -31,6 +33,7 @@ from .decision.provider import (
 from .decision.questions import build_questions, build_state
 from .decision.policy import apply_policy
 from .validation import (
+    ValidationStateTooLargeError,
     apply_validation_policy,
     build_validation_questions,
     build_validation_state,
@@ -47,18 +50,21 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SystemIQ Backend")
 
-# Reject request bodies larger than 50 KB to prevent abuse
+# Reject request bodies larger than 50 KB to prevent abuse. /validate gets a
+# bigger cap: design_markdown alone can be up to 40 KB.
 MAX_REQUEST_BODY_BYTES = 50 * 1024
+MAX_VALIDATE_BODY_BYTES = 100 * 1024
 
 
 @app.middleware("http")
 async def enforce_body_size(request: Request, call_next):
     # Read Content-Length header; reject oversized payloads before parsing
+    limit = MAX_VALIDATE_BODY_BYTES if request.url.path == "/validate" else MAX_REQUEST_BODY_BYTES
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
+    if content_length and int(content_length) > limit:
         return JSONResponse(
             status_code=413,
-            content={"detail": "Request body too large (max 50 KB)."},
+            content={"detail": f"Request body too large (max {limit // 1024} KB)."},
         )
     return await call_next(request)
 
@@ -120,6 +126,102 @@ def get_decision_provider() -> DecisionProvider:
             status_code=503,
             detail=f"Decision service is misconfigured: {e}",
         )
+
+
+# ── shared validation loop (used by /design's "validate" stage and /validate) ──
+
+
+@dataclass
+class ValidationRunResult:
+    """Everything /design and /validate both need after running validation."""
+    markdown: str
+    warnings: list[str] = field(default_factory=list)  # ADDITIONS only; caller prepends its own
+    results: list = field(default_factory=list)  # list[validation.policy.ValidationResult]
+    revision_rounds: list[dict] = field(default_factory=list)
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    status: str = "passed"
+
+
+def run_validation_loop(
+    requirements,
+    decisions: list[DecisionResultOut] | None,
+    design_markdown: str,
+    max_revisions: int,
+    llm: LLMProvider,
+    decision_provider: DecisionProvider,
+) -> ValidationRunResult:
+    """
+    Validate design_markdown against requirements/decisions, revising
+    flagged sections up to max_revisions times. A Jev rate-limit/auth/
+    unavailable error never raises -- it just stops the loop with
+    status="skipped" and a warning, so the caller can still return the
+    design. max_revisions=0 means revise_sections (and therefore the LLM)
+    is never called at all.
+    """
+    run = ValidationRunResult(markdown=design_markdown)
+    budget = TokenBudget()
+    revisions_done = 0
+
+    validation_questions = build_validation_questions(requirements, decisions)
+
+    while validation_questions:
+        try:
+            state = build_validation_state(requirements, decisions, run.markdown)
+            result_set = decision_provider.decide(state, to_jev_questions(validation_questions))
+
+        except ValidationStateTooLargeError:
+            # Never 500 the request over this -- just skip validation,
+            # same as any other "couldn't validate" condition.
+            run.status = "skipped"
+            run.warnings.append("validation skipped: design too large")
+            break
+        except DecisionRateLimitError:
+            run.status = "skipped"
+            run.warnings.append("validation skipped: rate limited")
+            break
+        except DecisionAuthError:
+            run.status = "skipped"
+            run.warnings.append("validation skipped: key rejected")
+            break
+        except (DecisionUnavailableError, DecisionFormatError):
+            run.status = "skipped"
+            run.warnings.append("validation skipped: unavailable")
+            break
+
+        run.calls += 1
+        run.input_tokens += result_set.input_tokens
+        run.output_tokens += result_set.output_tokens
+
+        run.results = [
+            apply_validation_policy(q, result_set.decisions[q.id]) for q in validation_questions
+        ]
+
+        flagged = [r for r in run.results if r.status == "flagged"]
+        flagged_with_sections = [r for r in flagged if r.sections]
+        for r in run.results:
+            if r.status == "possible" or (r.status == "flagged" and not r.sections):
+                run.warnings.append(f"validation: {r.id}")
+
+        if not flagged_with_sections or revisions_done >= max_revisions:
+            run.status = "flagged" if flagged else "passed"
+            break
+
+        new_markdown, revised_numbers, revise_warnings = revise_sections(
+            run.markdown, flagged_with_sections, requirements, decisions, llm, budget,
+        )
+        run.warnings.extend(revise_warnings)
+        run.markdown = new_markdown
+        revisions_done += 1
+        run.revision_rounds.append({
+            "round": revisions_done,
+            "sections_revised": revised_numbers,
+            "flagged_ids": [r.id for r in flagged_with_sections],
+        })
+        # Loop back: one more validation call to check the revised design.
+
+    return run
 
 
 # ── routes ─────────────────────────────────────────────────────────────────────
@@ -307,86 +409,74 @@ def design(
 
     # ── Step 6: validate the design, revising flagged sections ──────────────
     # (stage == "validate", the default)
-    design_warnings = list(design_result.warnings)
-    current_markdown = design_result.markdown
-    validation_results = []
-    revision_rounds: list[dict] = []
-    validation_calls = 0
-    validation_input_tokens = 0
-    validation_output_tokens = 0
-    validation_status = "passed"
-    revisions_done = 0
-    budget = TokenBudget()
+    run = run_validation_loop(
+        requirements, decision_results, design_result.markdown, request.max_revisions,
+        llm, decision_provider,
+    )
 
-    validation_questions = build_validation_questions(requirements, decision_results)
-
-    while validation_questions:
-        try:
-            state = build_validation_state(requirements, decision_results, current_markdown)
-            result_set = decision_provider.decide(state, to_jev_questions(validation_questions))
-
-        except DecisionRateLimitError:
-            validation_status = "skipped"
-            design_warnings.append("validation skipped: rate limited")
-            break
-        except DecisionAuthError:
-            validation_status = "skipped"
-            design_warnings.append("validation skipped: key rejected")
-            break
-        except (DecisionUnavailableError, DecisionFormatError):
-            validation_status = "skipped"
-            design_warnings.append("validation skipped: unavailable")
-            break
-
-        validation_calls += 1
-        validation_input_tokens += result_set.input_tokens
-        validation_output_tokens += result_set.output_tokens
-
-        validation_results = [
-            apply_validation_policy(q, result_set.decisions[q.id]) for q in validation_questions
-        ]
-
-        flagged = [r for r in validation_results if r.status == "flagged"]
-        flagged_with_sections = [r for r in flagged if r.sections]
-        for r in validation_results:
-            if r.status == "possible" or (r.status == "flagged" and not r.sections):
-                design_warnings.append(f"validation: {r.id}")
-
-        if not flagged_with_sections or revisions_done >= request.max_revisions:
-            validation_status = "flagged" if flagged else "passed"
-            break
-
-        new_markdown, revised_numbers, revise_warnings = revise_sections(
-            current_markdown, flagged_with_sections, requirements, decision_results, llm, budget,
-        )
-        design_warnings.extend(revise_warnings)
-        current_markdown = new_markdown
-        revisions_done += 1
-        revision_rounds.append({
-            "round": revisions_done,
-            "sections_revised": revised_numbers,
-            "flagged_ids": [r.id for r in flagged_with_sections],
-        })
-        # Loop back: one more validation call to check the revised design.
-
-    meta_kwargs["validation_calls"] = validation_calls
-    meta_kwargs["validation_input_tokens"] = validation_input_tokens
-    meta_kwargs["validation_output_tokens"] = validation_output_tokens
-    meta_kwargs["validation_status"] = validation_status
+    meta_kwargs["validation_calls"] = run.calls
+    meta_kwargs["validation_input_tokens"] = run.input_tokens
+    meta_kwargs["validation_output_tokens"] = run.output_tokens
+    meta_kwargs["validation_status"] = run.status
 
     return DesignResponse(
         stage="validated",
         requirements=requirements,
         decisions=decision_results,
         meta=DecisionMeta(**meta_kwargs),
-        design_markdown=current_markdown,
-        design_warnings=design_warnings,
+        design_markdown=run.markdown,
+        design_warnings=design_result.warnings + run.warnings,
         validation=[
             ValidationResultOut(
                 id=r.id, text=r.text, probability=r.probability,
                 status=r.status, sections=r.sections,
             )
-            for r in validation_results
+            for r in run.results
         ],
-        revisions=[RevisionRoundOut(**round_dict) for round_dict in revision_rounds],
+        revisions=[RevisionRoundOut(**round_dict) for round_dict in run.revision_rounds],
+    )
+
+
+@app.post("/validate", response_model=DesignResponse)
+def validate_design(
+    request: ValidateRequest,
+    llm: LLMProvider = Depends(get_provider),
+    decision_provider: DecisionProvider = Depends(get_decision_provider),
+):
+    """
+    Validate (and, if max_revisions > 0, revise) an already-produced
+    design without re-running extraction/decide/design. Reuses the exact
+    same validation loop as /design's "validate" stage.
+    """
+    run = run_validation_loop(
+        request.requirements, request.decisions, request.design_markdown,
+        request.max_revisions, llm, decision_provider,
+    )
+
+    meta = DecisionMeta(
+        # No decide-step call happened here, so these three are N/A.
+        decision_model="n/a (validation only)",
+        input_tokens=0,
+        output_tokens=0,
+        validation_calls=run.calls,
+        validation_input_tokens=run.input_tokens,
+        validation_output_tokens=run.output_tokens,
+        validation_status=run.status,
+    )
+
+    return DesignResponse(
+        stage="validated",
+        requirements=request.requirements,
+        decisions=request.decisions,
+        meta=meta,
+        design_markdown=run.markdown,
+        design_warnings=run.warnings,
+        validation=[
+            ValidationResultOut(
+                id=r.id, text=r.text, probability=r.probability,
+                status=r.status, sections=r.sections,
+            )
+            for r in run.results
+        ],
+        revisions=[RevisionRoundOut(**round_dict) for round_dict in run.revision_rounds],
     )

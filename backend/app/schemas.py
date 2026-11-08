@@ -163,6 +163,18 @@ class DecisionResultOut(BaseModel):
     based_on_unknowns: bool
 
 
+class ValidateRequest(BaseModel):
+    """
+    POST /validate: validate (and optionally revise) an already-produced
+    design without re-running extraction/decide/design.
+    """
+    requirements: Requirements
+    # Same shape /design returns; extra fields are ignored by pydantic.
+    decisions: list[DecisionResultOut] = Field(default_factory=list)
+    design_markdown: str = Field(max_length=40_000)
+    max_revisions: int = Field(default=0, ge=0, le=2)
+
+
 class DesignGroupStat(BaseModel):
     """Numbers only (no prompt text or model output) for one section group."""
     id: str

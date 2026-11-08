@@ -351,6 +351,43 @@ REQUEST_TIMEOUT = 150.0
 # free-tier rate limit, so it needs a much longer window.
 DESIGN_STAGE_TIMEOUT = 900.0
 
+# For these statuses, prefer the backend's own "detail" string when the
+# body is JSON and has one; otherwise fall back to the fixed message.
+# Shared by send_to_backend and send_validate_to_backend.
+_FALLBACK_MESSAGES = {
+    429: "error: rate limited, wait a minute and try again",
+    502: "error: backend could not extract valid requirements",
+    503: "error: backend is misconfigured; check server configuration and restart",
+    504: "error: backend timed out talking to the model",
+}
+
+
+def _exit_on_non_200(response: httpx.Response) -> None:
+    """Print a message to stderr and exit(1) for any non-200 response."""
+    if response.status_code in _FALLBACK_MESSAGES:
+        detail = None
+        try:
+            body = response.json()
+            if isinstance(body, dict) and isinstance(body.get("detail"), str) and body["detail"]:
+                detail = body["detail"]
+        except Exception:
+            detail = None
+
+        if detail:
+            print(f"error: {detail}", file=sys.stderr)
+        else:
+            print(_FALLBACK_MESSAGES[response.status_code], file=sys.stderr)
+        sys.exit(1)
+
+    if response.status_code != 200:
+        # Attempt to pull a human-readable message from the JSON body
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        print(f"error: HTTP {response.status_code}: {detail}", file=sys.stderr)
+        sys.exit(1)
+
 
 def send_to_backend(
     text: str,
@@ -399,41 +436,7 @@ def send_to_backend(
 
     # --- handle non-200 status codes -----------------------------------------
 
-    # For these statuses, prefer the backend's own "detail" string when the
-    # body is JSON and has one; otherwise fall back to the fixed message.
-    _FALLBACK_MESSAGES = {
-        429: "error: rate limited, wait a minute and try again",
-        502: "error: backend could not extract valid requirements",
-        503: "error: backend is misconfigured; check server configuration and restart",
-        504: "error: backend timed out talking to the model",
-    }
-
-    if response.status_code in _FALLBACK_MESSAGES:
-        detail = None
-        try:
-            body = response.json()
-            if isinstance(body, dict) and isinstance(body.get("detail"), str) and body["detail"]:
-                detail = body["detail"]
-        except Exception:
-            detail = None
-
-        if detail:
-            print(f"error: {detail}", file=sys.stderr)
-        else:
-            print(_FALLBACK_MESSAGES[response.status_code], file=sys.stderr)
-        sys.exit(1)
-
-    if response.status_code != 200:
-        # Attempt to pull a human-readable message from the JSON body
-        try:
-            detail = response.json().get("detail", response.text)
-        except Exception:
-            detail = response.text
-        print(
-            f"error: HTTP {response.status_code}: {detail}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    _exit_on_non_200(response)
 
     # --- parse and display the successful response ----------------------------
 
@@ -522,11 +525,134 @@ def send_to_backend(
     print_readable_response(data)
 
 
+# ── validate-only mode (--validate-saved) ───────────────────────────────────────
+
+def _decode_utf8_sig_text(path: Path) -> str:
+    """Read a file as text, tolerating a leading UTF-8 BOM."""
+    return path.read_bytes().decode("utf-8-sig")
+
+
+def load_validate_saved(path: str) -> tuple[dict, list, str]:
+    """
+    Read a saved /design (or /validate) response JSON and pull out the
+    three fields /validate needs. Raises ValueError with a clear message
+    if the file isn't valid JSON or is missing a needed field.
+    """
+    try:
+        data = json.loads(_decode_utf8_sig_text(Path(path)))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"could not read {path}: {exc}")
+
+    requirements = data.get("requirements")
+    if not isinstance(requirements, dict):
+        raise ValueError(f"{path} is missing 'requirements'")
+
+    design_markdown = data.get("design_markdown")
+    if not design_markdown:
+        raise ValueError(f"{path} is missing 'design_markdown'")
+
+    decisions = data.get("decisions") or []
+    return requirements, decisions, design_markdown
+
+
+def load_design_file(path: str) -> str:
+    """Read a design markdown file, tolerating a leading UTF-8 BOM."""
+    try:
+        return _decode_utf8_sig_text(Path(path))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"could not read {path}: {exc}")
+
+
+def send_validate_to_backend(
+    requirements: dict,
+    decisions: list,
+    design_markdown: str,
+    api_url: str,
+    json_mode: bool = False,
+    max_revisions: int = 0,
+    out_path: str | None = None,
+    force: bool = False,
+) -> None:
+    """
+    POST to /validate (not /design): validates an already-produced design,
+    optionally revising it. No idea text is involved, so there is no
+    redaction step. Writes nothing to disk unless out_path is given.
+    """
+    url = f"{api_url.rstrip('/')}/validate"
+    print(
+        "notice: validation only: uses 1 Jev request (no Groq call) unless --revise",
+        file=sys.stderr,
+    )
+
+    try:
+        response = httpx.post(
+            url,
+            json={
+                "requirements": requirements,
+                "decisions": decisions,
+                "design_markdown": design_markdown,
+                "max_revisions": max_revisions,
+            },
+            timeout=DESIGN_STAGE_TIMEOUT if max_revisions > 0 else REQUEST_TIMEOUT,
+        )
+    except httpx.ConnectError:
+        print("error: backend not running, start it first", file=sys.stderr)
+        sys.exit(1)
+    except httpx.TimeoutException:
+        print("error: request timed out", file=sys.stderr)
+        sys.exit(1)
+
+    _exit_on_non_200(response)
+
+    try:
+        data = response.json()
+    except Exception:
+        print("error: unexpected response from backend", file=sys.stderr)
+        sys.exit(1)
+
+    design_path = None
+    if out_path is not None:
+        design_path = write_design_file(data, out_path, force)
+
+    if json_mode:
+        print(json.dumps(data, indent=2))
+        return
+
+    if design_path is not None:
+        print(f"design written to {design_path}")
+
+    meta = data.get("meta") or {}
+    validation = data.get("validation") or []
+    if validation:
+        print()
+        for line in _format_validation_table(validation):
+            print(line)
+
+    revisions_line = _format_revisions_line(data.get("revisions") or [])
+    if revisions_line:
+        print(revisions_line)
+
+    validation_summary_line = _format_validation_summary_line(meta)
+    if validation_summary_line:
+        print(validation_summary_line)
+
+    warnings = data.get("design_warnings") or []
+    if warnings:
+        print("design warnings:")
+        for warning in warnings:
+            print(f"  - {warning}")
+
+
 # ── entry point ────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="SystemIQ CLI")
-    parser.add_argument("input", help="Input to process")
+    parser.add_argument(
+        "input",
+        nargs="?",
+        default=None,
+        help="Input to process (not required with --validate-saved)",
+    )
     parser.add_argument(
         "--api-url",
         default="http://localhost:8000",
@@ -574,8 +700,52 @@ def main():
         action="store_true",
         help="Stop at the design stage; skip Jev validation",
     )
+    parser.add_argument(
+        "--validate-saved",
+        default=None,
+        metavar="PATH",
+        help="Validate a saved /design response JSON instead of sending a new idea",
+    )
+    parser.add_argument(
+        "--design-file",
+        default=None,
+        metavar="PATH",
+        help="With --validate-saved: read the design markdown from this .md file instead",
+    )
+    parser.add_argument(
+        "--revise",
+        action="store_true",
+        help="With --validate-saved: send max_revisions from --max-revisions instead of 0",
+    )
     args = parser.parse_args()
     effective_stage = "design" if args.no_validate else args.stage
+
+    # --- --validate-saved: a completely separate, idea-free path ---------------
+
+    if args.validate_saved:
+        try:
+            requirements, decisions, design_markdown = load_validate_saved(args.validate_saved)
+            if args.design_file:
+                design_markdown = load_design_file(args.design_file)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        send_validate_to_backend(
+            requirements,
+            decisions,
+            design_markdown,
+            args.api_url,
+            json_mode=args.json,
+            max_revisions=args.max_revisions if args.revise else 0,
+            out_path=args.out,
+            force=args.force,
+        )
+        return
+
+    if not args.input:
+        print("error: either an idea or --validate-saved is required", file=sys.stderr)
+        sys.exit(1)
 
     try:
         text = load_input(args.input)

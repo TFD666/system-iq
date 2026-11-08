@@ -795,3 +795,210 @@ def test_no_redact_sends_original_and_warns(capsys):
     err = capsys.readouterr().err
     assert "warning" in err
     assert "no-redact" in err
+
+
+# ── --validate-saved / --design-file / --revise ─────────────────────────────────
+
+from systemiq import load_design_file, load_validate_saved, send_validate_to_backend  # noqa: E402
+
+VALIDATE_RESPONSE_BODY = {
+    "stage": "validated",
+    "requirements": SUCCESS_BODY["requirements"],
+    "decisions": FULL_SUCCESS_BODY["decisions"],
+    "meta": {
+        "decision_model": "n/a (validation only)",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "validation_calls": 1,
+        "validation_input_tokens": 10,
+        "validation_output_tokens": 5,
+        "validation_status": "passed",
+    },
+    "design_markdown": "## 1. Architecture overview\n\nSome design text.",
+    "design_warnings": [],
+    "validation": [
+        {"id": "val_auth", "text": "Does it?", "probability": 0.9, "status": "ok", "sections": [6]},
+    ],
+    "revisions": [],
+}
+
+_SAVED_RESPONSE_JSON = json.dumps({
+    "requirements": SUCCESS_BODY["requirements"],
+    "decisions": FULL_SUCCESS_BODY["decisions"],
+    "design_markdown": "## 1. Architecture overview\n\nOriginal design text.",
+})
+
+
+def test_load_validate_saved_reads_a_bom_file(tmp_path):
+    path = tmp_path / "saved.json"
+    path.write_bytes(b"\xef\xbb\xbf" + _SAVED_RESPONSE_JSON.encode("utf-8"))
+
+    requirements, decisions, design_markdown = load_validate_saved(str(path))
+    assert requirements["app_type"] == SUCCESS_BODY["requirements"]["app_type"]
+    assert decisions == FULL_SUCCESS_BODY["decisions"]
+    assert "Original design text" in design_markdown
+
+
+def test_load_validate_saved_missing_field_gives_a_clear_error(tmp_path):
+    path = tmp_path / "saved.json"
+    path.write_text(json.dumps({"requirements": SUCCESS_BODY["requirements"]}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="design_markdown"):
+        load_validate_saved(str(path))
+
+
+def test_load_design_file_reads_a_bom_file(tmp_path):
+    path = tmp_path / "design.md"
+    path.write_bytes(b"\xef\xbb\xbf## 1. Heading\n\nEdited text.")
+
+    text = load_design_file(str(path))
+    assert text == "## 1. Heading\n\nEdited text."
+
+
+def test_send_validate_to_backend_prints_notice_and_table(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATE_RESPONSE_BODY)) as mock_post:
+        send_validate_to_backend(
+            SUCCESS_BODY["requirements"], FULL_SUCCESS_BODY["decisions"],
+            "## 1. Architecture overview\n\nSome text.", DUMMY_URL,
+        )
+
+    captured = capsys.readouterr()
+    assert "validation only" in captured.err
+    assert "no Groq call" in captured.err
+    out = captured.out
+    assert "Validation:" in out
+    assert "val_auth" in out
+    assert "validation: passed, 1 Jev requests" in out
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert sent_payload["max_revisions"] == 0
+    assert "idea" not in sent_payload
+
+
+def test_send_validate_to_backend_json_mode_prints_only_json(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATE_RESPONSE_BODY)):
+        send_validate_to_backend(
+            SUCCESS_BODY["requirements"], FULL_SUCCESS_BODY["decisions"],
+            "## 1. Architecture overview\n\nSome text.", DUMMY_URL, json_mode=True,
+        )
+
+    out = capsys.readouterr().out
+    parsed = json.loads(out)
+    assert parsed["stage"] == "validated"
+
+
+def test_send_validate_to_backend_writes_file_only_with_out(tmp_path):
+    out_path = tmp_path / "out.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATE_RESPONSE_BODY)):
+        send_validate_to_backend(
+            SUCCESS_BODY["requirements"], FULL_SUCCESS_BODY["decisions"],
+            "## 1. Architecture overview\n\nSome text.", DUMMY_URL, out_path=str(out_path),
+        )
+    assert out_path.exists()
+
+
+def test_send_validate_to_backend_without_out_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATE_RESPONSE_BODY)):
+        send_validate_to_backend(
+            SUCCESS_BODY["requirements"], FULL_SUCCESS_BODY["decisions"],
+            "## 1. Architecture overview\n\nSome text.", DUMMY_URL,
+        )
+    assert not (tmp_path / "system-design.md").exists()
+
+
+def test_send_validate_to_backend_revise_sends_max_revisions(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATE_RESPONSE_BODY)) as mock_post:
+        send_validate_to_backend(
+            SUCCESS_BODY["requirements"], FULL_SUCCESS_BODY["decisions"],
+            "## 1. Architecture overview\n\nSome text.", DUMMY_URL, max_revisions=2,
+        )
+    assert mock_post.call_args.kwargs["json"]["max_revisions"] == 2
+
+
+def test_send_validate_to_backend_rate_limit_falls_back_to_fixed_message(capsys):
+    with patch("systemiq.httpx.post", return_value=make_response(429, {})):
+        with pytest.raises(SystemExit) as exc_info:
+            send_validate_to_backend(
+                SUCCESS_BODY["requirements"], FULL_SUCCESS_BODY["decisions"],
+                "## 1. Architecture overview\n\nSome text.", DUMMY_URL,
+            )
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "rate limited" in err
+
+
+def test_main_requires_either_input_or_validate_saved(capsys):
+    from systemiq import main
+    with patch("sys.argv", ["systemiq"]):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "--validate-saved" in err
+
+
+def test_main_validate_saved_sends_to_validate_endpoint(tmp_path):
+    from systemiq import main
+
+    saved_path = tmp_path / "saved.json"
+    saved_path.write_text(_SAVED_RESPONSE_JSON, encoding="utf-8")
+
+    captured = {"url": None, "payload": None}
+
+    def capture_post(url, *, json, **kwargs):
+        captured["url"] = url
+        captured["payload"] = json
+        return make_response(200, VALIDATE_RESPONSE_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", ["systemiq", "--validate-saved", str(saved_path)]):
+            main()
+
+    assert captured["url"].endswith("/validate")
+    assert captured["payload"]["max_revisions"] == 0  # --revise not given
+    assert "idea" not in captured["payload"]
+
+
+def test_main_validate_saved_with_design_file_overrides_markdown(tmp_path):
+    from systemiq import main
+
+    saved_path = tmp_path / "saved.json"
+    saved_path.write_text(_SAVED_RESPONSE_JSON, encoding="utf-8")
+    design_path = tmp_path / "edited.md"
+    design_path.write_text("## 1. Architecture overview\n\nEdited by hand.", encoding="utf-8")
+
+    captured_payload = {}
+
+    def capture_post(url, *, json, **kwargs):
+        captured_payload.update(json)
+        return make_response(200, VALIDATE_RESPONSE_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", [
+            "systemiq", "--validate-saved", str(saved_path), "--design-file", str(design_path),
+        ]):
+            main()
+
+    assert "Edited by hand" in captured_payload["design_markdown"]
+    assert "Original design text" not in captured_payload["design_markdown"]
+
+
+def test_main_validate_saved_with_revise_sends_max_revisions(tmp_path):
+    from systemiq import main
+
+    saved_path = tmp_path / "saved.json"
+    saved_path.write_text(_SAVED_RESPONSE_JSON, encoding="utf-8")
+    captured_payload = {}
+
+    def capture_post(url, *, json, **kwargs):
+        captured_payload.update(json)
+        return make_response(200, VALIDATE_RESPONSE_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", [
+            "systemiq", "--validate-saved", str(saved_path), "--revise", "--max-revisions", "2",
+        ]):
+            main()
+
+    assert captured_payload["max_revisions"] == 2
