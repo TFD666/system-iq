@@ -99,8 +99,10 @@ def build_questions(req: Requirements) -> list[Question]:
         depends_on=["expected_scale"],
     ))
 
-    # Conditional: authentication approach – skip only when explicitly False.
-    if req.authentication is not False:
+    # Conditional: authentication approach – only when explicitly True.
+    # (Previously asked whenever authentication wasn't False, so an
+    # unaddressed/unknown authentication flag wrongly got a real question.)
+    if req.authentication is True:
         questions.append(Question(
             id="auth_approach",
             kind="choice",

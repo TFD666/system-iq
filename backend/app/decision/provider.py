@@ -710,9 +710,14 @@ class ReplayDecisionProvider(DecisionProvider):
                         for alt in (saved.get("top_alternatives") or [])
                     ],
                 )
+            elif q.id.startswith("val_") and q.kind == "noul":
+                # Unknown VALIDATION question: 0.5 reads as "possible" on
+                # both polarities (see validation/policy.py) -- never
+                # silently "ok", never a forced flag/revision.
+                decisions[q.id] = Decision(id=q.id, kind="noul", probability=0.5)
             else:
-                # Unknown id: force kind="choice" with 0 alternatives.
-                # apply_policy turns that into status="needs_review" at
+                # Unknown id (decision pipeline): force kind="choice" with 0
+                # alternatives. apply_policy turns that into status="needs_review" at
                 # probability 0 for ANY question kind, which is exactly
                 # the "we don't have a saved answer" result we want.
                 decisions[q.id] = Decision(id=q.id, kind="choice", probability=0.0)

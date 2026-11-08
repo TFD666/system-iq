@@ -23,8 +23,11 @@ from app.llm import (
     RateLimitError,
 )
 from app.decision.provider import (
+    Alternative,
+    Decision,
     DecisionAuthError,
     DecisionProvider,
+    DecisionRateLimitError,
     DecisionResultSet,
     FakeDecisionProvider,
 )
@@ -161,7 +164,7 @@ def clear_dependency_overrides():
 # ── /design endpoint tests ─────────────────────────────────────────────────────
 
 def test_valid_idea_returns_200_and_stage_decided():
-    # The default stage is now "design" (the full pipeline), so this test
+    # The default stage is now "validate" (the full pipeline), so this test
     # must ask for stage="decide" explicitly to still exercise/assert the
     # "decided" stopping point -- that's the point of this specific test.
     client = make_client(AlwaysGoodProvider())
@@ -230,12 +233,12 @@ def test_stage_decide_returns_decided_and_skips_design():
     assert body["meta"]["llm_model"] is None
 
 
-def test_stage_defaults_to_design_and_returns_markdown_and_warnings():
-    # AlwaysGoodProvider has no complete_text, so this uses the provider
-    # that implements both -- proving "design" (not just "decide") is the
-    # actual default when "stage" is omitted.
+def test_stage_design_returns_markdown_and_warnings():
+    # Renamed: the default stage is now "validate" (not "design"), so
+    # this test -- about the design step specifically -- now asks for
+    # stage="design" explicitly instead of relying on the old default.
     client = make_client(GoodProviderWithDesign())
-    response = client.post("/design", json={"idea": "Build a to-do app"})
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "design"})
     assert response.status_code == 200
     body = response.json()
     assert body["stage"] == "designed"
@@ -259,6 +262,135 @@ def test_invalid_stage_returns_422():
     client = make_client(AlwaysGoodProvider())
     response = client.post("/design", json={"idea": "Build a to-do app", "stage": "bogus"})
     assert response.status_code == 422
+
+
+# ── validate stage ───────────────────────────────────────────────────────────
+
+# "problem" validation ids: a HIGH forced probability means "flagged".
+# "satisfied" ones (everything else _ScriptedValidationProvider sees): a
+# LOW forced probability means "flagged". Mirrors validation/policy.py.
+_PROBLEM_VAL_IDS = {
+    "val_missing_component", "val_invented", "val_contradiction",
+    "val_unneeded_complexity", "val_scale_overclaim",
+}
+
+
+class AlwaysFlagValidationDecisionProvider(DecisionProvider):
+    """
+    Decide step: a plain accepted choice / "no" noul for every question.
+    Validation step: every validation question is forced to "flagged",
+    so the pipeline keeps revising until it hits max_revisions.
+    """
+    def __init__(self) -> None:
+        self.decide_calls = 0  # only counts validation calls, not the decide step
+
+    def decide(self, state, questions) -> DecisionResultSet:
+        if any(q.id.startswith("val_") for q in questions):
+            self.decide_calls += 1
+        decisions: dict[str, Decision] = {}
+        for q in questions:
+            if q.id.startswith("val_"):
+                p = 0.9 if q.id in _PROBLEM_VAL_IDS else 0.1
+                decisions[q.id] = Decision(id=q.id, kind="noul", probability=p)
+            elif q.kind == "choice":
+                option = q.options[0] if q.options else "X"
+                decisions[q.id] = Decision(
+                    id=q.id, kind="choice", choice=option, probability=0.9,
+                    alternatives=[Alternative(option=option, probability=0.9)],
+                )
+            else:
+                decisions[q.id] = Decision(id=q.id, kind="noul", probability=0.1)
+        return DecisionResultSet(
+            decisions=decisions, model="scripted", input_tokens=5, output_tokens=5,
+            billing_source="free", cost=0.0,
+        )
+
+
+class RateLimitOnValidationDecisionProvider(DecisionProvider):
+    """Succeeds at the decide step, but validation calls hit a rate limit."""
+
+    def decide(self, state, questions) -> DecisionResultSet:
+        if any(q.id.startswith("val_") for q in questions):
+            raise DecisionRateLimitError(retry_after_seconds=5)
+        decisions: dict[str, Decision] = {}
+        for q in questions:
+            if q.kind == "choice":
+                option = q.options[0] if q.options else "X"
+                decisions[q.id] = Decision(
+                    id=q.id, kind="choice", choice=option, probability=0.9,
+                    alternatives=[Alternative(option=option, probability=0.9)],
+                )
+            else:
+                decisions[q.id] = Decision(id=q.id, kind="noul", probability=0.1)
+        return DecisionResultSet(
+            decisions=decisions, model="scripted", input_tokens=5, output_tokens=5,
+            billing_source="free", cost=0.0,
+        )
+
+
+@pytest.mark.parametrize("max_revisions,expected_calls", [(0, 1), (1, 2), (2, 3)])
+def test_validate_stage_jev_call_counts_follow_max_revisions(max_revisions, expected_calls):
+    provider = AlwaysFlagValidationDecisionProvider()
+    client = make_client_with_decision(GoodProviderWithDesign(), provider)
+    response = client.post(
+        "/design", json={"idea": "Build a to-do app", "max_revisions": max_revisions}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage"] == "validated"
+    assert provider.decide_calls == expected_calls
+    assert body["meta"]["validation_calls"] == expected_calls
+    assert len(body["revisions"]) == min(max_revisions, expected_calls - 1)
+
+
+def test_flagged_without_sections_only_warns_never_blocks_other_revisions():
+    provider = AlwaysFlagValidationDecisionProvider()
+    client = make_client_with_decision(GoodProviderWithDesign(), provider)
+    response = client.post("/design", json={"idea": "Build a to-do app", "max_revisions": 1})
+    body = response.json()
+    # val_contradiction / val_unneeded_complexity have sections=[] -- they
+    # can only ever warn, never trigger a revision of their own.
+    assert "validation: val_contradiction" in body["design_warnings"]
+    assert "validation: val_unneeded_complexity" in body["design_warnings"]
+
+
+def test_fake_mode_never_revises(monkeypatch):
+    monkeypatch.setenv("DECISION_PROVIDER", "fake")
+    client = make_client_real_decision(GoodProviderWithDesign())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 200
+    body = response.json()
+    # FakeDecisionProvider answers everything with probability 0.5, which
+    # reads as "possible" on both polarities -- never "flagged".
+    assert body["revisions"] == []
+    assert body["meta"]["validation_status"] == "passed"
+    assert all(r["status"] != "flagged" for r in body["validation"])
+
+
+def test_validation_rate_limit_still_returns_the_design_as_skipped():
+    client = make_client_with_decision(GoodProviderWithDesign(), RateLimitOnValidationDecisionProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage"] == "validated"
+    assert body["design_markdown"]  # the design itself is still returned
+    assert body["meta"]["validation_status"] == "skipped"
+    assert any("rate limited" in w for w in body["design_warnings"])
+
+
+def test_no_validation_text_or_design_text_in_logs(caplog):
+    import logging
+    provider = AlwaysFlagValidationDecisionProvider()
+    client = make_client_with_decision(GoodProviderWithDesign(), provider)
+    with caplog.at_level(logging.DEBUG):
+        response = client.post(
+            "/design", json={"idea": "Build a to-do app", "max_revisions": 2}
+        )
+    markdown = response.json()["design_markdown"]
+    for record in caplog.records:
+        message = record.getMessage()
+        assert markdown not in message
+        assert "Some generated section text" not in message
 
 
 class AlwaysBadDesignProvider(LLMProvider):

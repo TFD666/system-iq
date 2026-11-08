@@ -15,6 +15,8 @@ from .schemas import (
     DesignGroupStat,
     DesignRequest,
     DesignResponse,
+    RevisionRoundOut,
+    ValidationResultOut,
 )
 from .decision.provider import (
     DecisionAuthError,
@@ -28,6 +30,13 @@ from .decision.provider import (
 )
 from .decision.questions import build_questions, build_state
 from .decision.policy import apply_policy
+from .validation import (
+    apply_validation_policy,
+    build_validation_questions,
+    build_validation_state,
+    revise_sections,
+    to_jev_questions,
+)
 
 # ── logging setup ──────────────────────────────────────────────────────────────
 
@@ -124,9 +133,10 @@ def design(
     """
     Accept a project idea and run the pipeline up to request.stage:
     "extract" -> requirements only, "decide" -> + architecture decisions,
-    "design" (default) -> + a written design document.
+    "design" -> + a written design document, "validate" (default) -> +
+    a Jev-checked (and possibly revised) design document.
     All heavy lifting happens in extraction.py, the decision provider, and
-    app/design/; errors are translated to HTTP codes here.
+    app/design/ and app/validation/; errors are translated to HTTP codes here.
     Provider is synchronous, so this is a plain def, not async def.
     """
     # ── Step 1: extract requirements from the idea ──────────────────────────
@@ -285,11 +295,98 @@ def design(
         for stat in design_result.group_stats
     ]
 
+    if request.stage == "design":
+        return DesignResponse(
+            stage="designed",
+            requirements=requirements,
+            decisions=decision_results,
+            meta=DecisionMeta(**meta_kwargs),
+            design_markdown=design_result.markdown,
+            design_warnings=design_result.warnings,
+        )
+
+    # ── Step 6: validate the design, revising flagged sections ──────────────
+    # (stage == "validate", the default)
+    design_warnings = list(design_result.warnings)
+    current_markdown = design_result.markdown
+    validation_results = []
+    revision_rounds: list[dict] = []
+    validation_calls = 0
+    validation_input_tokens = 0
+    validation_output_tokens = 0
+    validation_status = "passed"
+    revisions_done = 0
+    budget = TokenBudget()
+
+    validation_questions = build_validation_questions(requirements, decision_results)
+
+    while validation_questions:
+        try:
+            state = build_validation_state(requirements, decision_results, current_markdown)
+            result_set = decision_provider.decide(state, to_jev_questions(validation_questions))
+
+        except DecisionRateLimitError:
+            validation_status = "skipped"
+            design_warnings.append("validation skipped: rate limited")
+            break
+        except DecisionAuthError:
+            validation_status = "skipped"
+            design_warnings.append("validation skipped: key rejected")
+            break
+        except (DecisionUnavailableError, DecisionFormatError):
+            validation_status = "skipped"
+            design_warnings.append("validation skipped: unavailable")
+            break
+
+        validation_calls += 1
+        validation_input_tokens += result_set.input_tokens
+        validation_output_tokens += result_set.output_tokens
+
+        validation_results = [
+            apply_validation_policy(q, result_set.decisions[q.id]) for q in validation_questions
+        ]
+
+        flagged = [r for r in validation_results if r.status == "flagged"]
+        flagged_with_sections = [r for r in flagged if r.sections]
+        for r in validation_results:
+            if r.status == "possible" or (r.status == "flagged" and not r.sections):
+                design_warnings.append(f"validation: {r.id}")
+
+        if not flagged_with_sections or revisions_done >= request.max_revisions:
+            validation_status = "flagged" if flagged else "passed"
+            break
+
+        new_markdown, revised_numbers, revise_warnings = revise_sections(
+            current_markdown, flagged_with_sections, requirements, decision_results, llm, budget,
+        )
+        design_warnings.extend(revise_warnings)
+        current_markdown = new_markdown
+        revisions_done += 1
+        revision_rounds.append({
+            "round": revisions_done,
+            "sections_revised": revised_numbers,
+            "flagged_ids": [r.id for r in flagged_with_sections],
+        })
+        # Loop back: one more validation call to check the revised design.
+
+    meta_kwargs["validation_calls"] = validation_calls
+    meta_kwargs["validation_input_tokens"] = validation_input_tokens
+    meta_kwargs["validation_output_tokens"] = validation_output_tokens
+    meta_kwargs["validation_status"] = validation_status
+
     return DesignResponse(
-        stage="designed",
+        stage="validated",
         requirements=requirements,
         decisions=decision_results,
         meta=DecisionMeta(**meta_kwargs),
-        design_markdown=design_result.markdown,
-        design_warnings=design_result.warnings,
+        design_markdown=current_markdown,
+        design_warnings=design_warnings,
+        validation=[
+            ValidationResultOut(
+                id=r.id, text=r.text, probability=r.probability,
+                status=r.status, sections=r.sections,
+            )
+            for r in validation_results
+        ],
+        revisions=[RevisionRoundOut(**round_dict) for round_dict in revision_rounds],
     )

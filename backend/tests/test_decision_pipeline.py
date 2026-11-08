@@ -192,10 +192,12 @@ class TestBuildQuestions:
         req = _make_requirements(authentication=True)
         assert "auth_approach" in _question_ids(req)
 
-    def test_authentication_none_includes_auth_approach(self):
-        # None means "not addressed" – we still ask
+    def test_authentication_none_drops_auth_approach(self):
+        # Changed: None ("not addressed") used to still ask auth_approach
+        # (condition was "not False"); now it's only asked when explicitly
+        # True, matching every other conditional question in this file.
         req = _make_requirements(authentication=None)
-        assert "auth_approach" in _question_ids(req)
+        assert "auth_approach" not in _question_ids(req)
 
     def test_authentication_false_drops_auth_approach(self):
         # Explicitly false → no auth needed, no question

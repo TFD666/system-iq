@@ -152,3 +152,20 @@ def all_headings() -> list[str]:
             headings.append(section["heading"])
     headings.append(ASSUMPTIONS_HEADING)  # code-generated, not from the LLM
     return headings
+
+
+def heading_number(heading: str) -> int:
+    """"## 13. Assumptions and open questions" -> 13. Used by validation/
+    revise.py to map a section number back to its heading text."""
+    return int(heading.split()[1].rstrip("."))
+
+
+def section_heading_by_number() -> dict[int, dict]:
+    """Map section number (1-12 only -- never 13) to its {"heading",
+    "guidance"} dict, for revise.py to rebuild a pseudo-group to reuse
+    the writer's per-group prompt/quality-gate machinery."""
+    mapping: dict[int, dict] = {}
+    for group in SECTION_GROUPS:
+        for section in group["sections"]:
+            mapping[heading_number(section["heading"])] = section
+    return mapping

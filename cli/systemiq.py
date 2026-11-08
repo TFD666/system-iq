@@ -230,6 +230,51 @@ def _format_summary_line(meta: dict) -> str | None:
     return f"model: {model} | tokens: {in_display} in / {out_display} out"
 
 
+# ── validation rendering ─────────────────────────────────────────────────────
+
+_VAL_COL_ID = 28
+_VAL_COL_STATUS = 10
+_VAL_COL_PROB = 8
+
+
+def _format_validation_table(validation: list[dict]) -> list[str]:
+    if not validation:
+        return []
+    lines = ["Validation:"]
+    header = f"{'ID':<{_VAL_COL_ID}} {'STATUS':<{_VAL_COL_STATUS}} {'PROB':>{_VAL_COL_PROB}}  SECTIONS"
+    lines.append(header)
+    lines.append("-" * len(header))
+    for v in validation:
+        vid = _truncate(str(v.get("id", "")), _VAL_COL_ID)
+        status = str(v.get("status", ""))
+        prob = v.get("probability")
+        prob_display = f"{prob * 100:.0f}%" if isinstance(prob, (int, float)) else "n/a"
+        sections = v.get("sections") or []
+        sections_display = ", ".join(str(s) for s in sections) if sections else "-"
+        lines.append(
+            f"{vid:<{_VAL_COL_ID}} {status:<{_VAL_COL_STATUS}} {prob_display:>{_VAL_COL_PROB}}  {sections_display}"
+        )
+    return lines
+
+
+def _format_revisions_line(revisions: list[dict]) -> str | None:
+    if not revisions:
+        return None
+    all_numbers = sorted({n for r in revisions for n in (r.get("sections_revised") or [])})
+    sections_display = ", ".join(str(n) for n in all_numbers) if all_numbers else "none"
+    n_rounds = len(revisions)
+    round_word = "round" if n_rounds == 1 else "rounds"
+    return f"revised sections: {sections_display} in {n_rounds} {round_word}"
+
+
+def _format_validation_summary_line(meta: dict) -> str | None:
+    status = meta.get("validation_status")
+    if status is None:
+        return None
+    calls = meta.get("validation_calls") or 0
+    return f"validation: {status}, {calls} Jev requests"
+
+
 def print_readable_response(data: dict) -> None:
     """Print the backend's /design response as human-readable ASCII text."""
     meta = data.get("meta") or {}
@@ -265,8 +310,13 @@ def _build_design_header(meta: dict) -> str:
         f"<!-- LLM model: {llm_model} | Decision model: {decision_model} -->",
         "<!-- Decisions marked provisional depend on requirements that were",
         "     not fully specified; confirm them before relying on this design. -->",
-        "",
     ]
+    validation_status = meta.get("validation_status")
+    if validation_status == "skipped":
+        lines.append("<!-- validation skipped -->")
+    elif validation_status is not None:
+        lines.append(f"<!-- validated by Jev: {validation_status} -->")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -306,23 +356,26 @@ def send_to_backend(
     text: str,
     api_url: str,
     json_mode: bool = False,
-    stage: str = "design",
+    stage: str = "validate",
     out_path: str | None = None,
     force: bool = False,
+    max_revisions: int = 1,
 ) -> None:
     """
     POST the validated (and possibly redacted) idea text to the backend
     /design endpoint and print the result. By default prints a
     human-readable rendering to stdout; with json_mode=True prints the raw
     response as indented JSON and nothing else on stdout.
-    On a "designed" response, also writes the design markdown to out_path
-    (default ./system-design.md).
+    On a "designed"/"validated" response, also writes the design markdown
+    to out_path (default ./system-design.md).
     On any error, print a message to stderr and raise SystemExit(1).
     """
     url = f"{api_url.rstrip('/')}/design"
-    timeout = DESIGN_STAGE_TIMEOUT if stage == "design" else REQUEST_TIMEOUT
+    # "validate" runs the design step too (and more Jev calls on top), so
+    # it needs at least as long a window.
+    timeout = DESIGN_STAGE_TIMEOUT if stage in ("design", "validate") else REQUEST_TIMEOUT
 
-    if stage == "design":
+    if stage in ("design", "validate"):
         # The design step makes several LLM calls in a row, each possibly
         # waiting out a free-tier rate limit -- set expectations up front.
         print("notice: this can take 2 to 5 minutes on the free tier", file=sys.stderr)
@@ -330,7 +383,7 @@ def send_to_backend(
     try:
         response = httpx.post(
             url,
-            json={"idea": text, "stage": stage},
+            json={"idea": text, "stage": stage, "max_revisions": max_revisions},
             timeout=timeout,
         )
 
@@ -420,7 +473,7 @@ def send_to_backend(
     # artifact, not terminal output, so --json's "raw response only" rule
     # (which is about stdout) doesn't apply to it.
     design_path = None
-    if data.get("stage") == "designed":
+    if data.get("stage") in ("designed", "validated"):
         design_path = write_design_file(data, out_path, force)
 
     if json_mode:
@@ -444,6 +497,20 @@ def send_to_backend(
                 f"design: {n_groups} groups, {total_retries} retries, "
                 f"{total_seconds} s, {total_in}/{total_out} tokens"
             )
+
+        validation = data.get("validation") or []
+        if validation:
+            print()
+            for line in _format_validation_table(validation):
+                print(line)
+
+        revisions_line = _format_revisions_line(data.get("revisions") or [])
+        if revisions_line:
+            print(revisions_line)
+
+        validation_summary_line = _format_validation_summary_line(meta)
+        if validation_summary_line:
+            print(validation_summary_line)
 
         warnings = data.get("design_warnings") or []
         if warnings:
@@ -482,9 +549,9 @@ def main():
     )
     parser.add_argument(
         "--stage",
-        choices=["extract", "decide", "design"],
-        default="design",
-        help="Pipeline stage to stop at (default: design)",
+        choices=["extract", "decide", "design", "validate"],
+        default="validate",
+        help="Pipeline stage to stop at (default: validate)",
     )
     parser.add_argument(
         "--out",
@@ -496,7 +563,19 @@ def main():
         action="store_true",
         help="Overwrite an existing design output file",
     )
+    parser.add_argument(
+        "--max-revisions",
+        type=int,
+        default=1,
+        help="How many revise-then-revalidate rounds the validate stage may use (default: 1)",
+    )
+    parser.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="Stop at the design stage; skip Jev validation",
+    )
     args = parser.parse_args()
+    effective_stage = "design" if args.no_validate else args.stage
 
     try:
         text = load_input(args.input)
@@ -538,9 +617,10 @@ def main():
         clean_text,
         args.api_url,
         json_mode=args.json,
-        stage=args.stage,
+        stage=effective_stage,
         out_path=args.out,
         force=args.force,
+        max_revisions=args.max_revisions,
     )
 
 

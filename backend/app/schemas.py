@@ -32,8 +32,10 @@ _EVIDENCE_QUOTE_MAX_LEN = 120
 class DesignRequest(BaseModel):
     # The raw project idea from the user
     idea: str = Field(min_length=1, max_length=20_000)
-    # Which pipeline step to stop at. Default "design" runs the whole thing.
-    stage: Literal["extract", "decide", "design"] = "design"
+    # Which pipeline step to stop at. Default "validate" runs the whole thing.
+    stage: Literal["extract", "decide", "design", "validate"] = "validate"
+    # How many revise-then-revalidate rounds the validate stage may use.
+    max_revisions: int = Field(default=1, ge=0, le=2)
 
 
 class ExpectedScale(BaseModel):
@@ -170,31 +172,55 @@ class DesignGroupStat(BaseModel):
     elapsed_seconds: float
 
 
+class ValidationResultOut(BaseModel):
+    """One validation question's answer, after apply_validation_policy."""
+    id: str
+    text: str              # fixed template sentence, never user input
+    probability: float
+    status: str            # "ok" | "possible" | "flagged"
+    sections: list[int]    # design section numbers this answer is about
+
+
+class RevisionRoundOut(BaseModel):
+    """Numbers and ids only for one revise-then-revalidate round."""
+    round: int
+    sections_revised: list[int]
+    flagged_ids: list[str]
+
+
 class DecisionMeta(BaseModel):
     """Token-usage and model metadata from the Jev call, plus (for the
-    "designed" stage only) the LLM model and token counts for the design
-    write-up step."""
+    "designed"/"validated" stages) the LLM model, design token counts,
+    and (for "validated") validation call/token counts and status."""
     decision_model: str
     input_tokens: int
     output_tokens: int
     # Set when the provider reports billing info; None for fake/unknown providers.
     decision_billing: str | None = None
     decision_cost: float | None = None
-    # The fields below are only set when stage == "design".
+    # The fields below are only set when stage == "design" or "validate".
     llm_model: str | None = None
     design_prompt_tokens: int | None = None
     design_completion_tokens: int | None = None
     design_group_stats: list[DesignGroupStat] | None = None
+    # The fields below are only set when stage == "validate".
+    validation_calls: int | None = None
+    validation_input_tokens: int | None = None
+    validation_output_tokens: int | None = None
+    validation_status: str | None = None  # "passed" | "flagged" | "skipped"
 
 
 class DesignResponse(BaseModel):
     # "stage" records which pipeline step produced this response:
-    # "extracted" | "decided" | "designed"
+    # "extracted" | "decided" | "designed" | "validated"
     stage: str
     requirements: Requirements
-    # Present when stage == "decided" or "designed"; None for "extracted"
+    # Present when stage == "decided"/"designed"/"validated"; None for "extracted"
     decisions: list[DecisionResultOut] | None = None
     meta: DecisionMeta | None = None
-    # Present only when stage == "designed"
+    # Present when stage == "designed" or "validated"
     design_markdown: str | None = None
     design_warnings: list[str] | None = None
+    # Present only when stage == "validated"
+    validation: list[ValidationResultOut] | None = None
+    revisions: list[RevisionRoundOut] | None = None

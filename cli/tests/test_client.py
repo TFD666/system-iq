@@ -438,6 +438,151 @@ def test_stage_flag_is_sent_to_backend_payload():
     assert captured_payload.get("stage") == "extract"
 
 
+# ── validate stage: table, revisions line, header, --no-validate ───────────────
+
+VALIDATED_BODY = {
+    "stage": "validated",
+    "requirements": SUCCESS_BODY["requirements"],
+    "decisions": FULL_SUCCESS_BODY["decisions"],
+    "meta": {
+        "decision_model": "jev-1.13-free",
+        "input_tokens": 50,
+        "output_tokens": 20,
+        "decision_billing": "free",
+        "decision_cost": 0.0,
+        "llm_model": "qwen/qwen3-27b",
+        "design_prompt_tokens": 400,
+        "design_completion_tokens": 900,
+        "design_group_stats": DESIGNED_BODY["meta"]["design_group_stats"],
+        "validation_calls": 2,
+        "validation_input_tokens": 30,
+        "validation_output_tokens": 10,
+        "validation_status": "flagged",
+    },
+    "design_markdown": "## 1. Architecture overview\n\nSome generated text.",
+    "design_warnings": ["validation: val_contradiction"],
+    "validation": [
+        {"id": "val_auth", "text": "Does it?", "probability": 0.2, "status": "flagged", "sections": [6, 8]},
+        {"id": "val_contradiction", "text": "Any contradiction?", "probability": 0.65, "status": "flagged", "sections": []},
+    ],
+    "revisions": [
+        {"round": 1, "sections_revised": [6, 8], "flagged_ids": ["val_auth"]},
+    ],
+}
+
+
+def test_validated_response_prints_validation_table(tmp_path, capsys):
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATED_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    out = capsys.readouterr().out
+    assert "Validation:" in out
+    assert "val_auth" in out
+    assert "20%" in out
+    assert "flagged" in out
+    assert "6, 8" in out
+
+
+def test_validated_response_prints_revisions_line(tmp_path, capsys):
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATED_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    out = capsys.readouterr().out
+    assert "revised sections: 6, 8 in 1 round" in out
+
+
+def test_validated_response_prints_validation_summary_line(tmp_path, capsys):
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATED_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    out = capsys.readouterr().out
+    assert "validation: flagged, 2 Jev requests" in out
+
+
+def test_validated_response_header_says_validated_by_jev(tmp_path):
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, VALIDATED_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    content = out_path.read_text(encoding="utf-8")
+    assert "validated by Jev: flagged" in content
+
+
+def test_validated_response_header_says_validation_skipped_when_skipped(tmp_path):
+    skipped_body = json.loads(json.dumps(VALIDATED_BODY))
+    skipped_body["meta"]["validation_status"] = "skipped"
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, skipped_body)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    content = out_path.read_text(encoding="utf-8")
+    assert "validation skipped" in content
+
+
+def test_designed_response_header_has_no_validation_line(tmp_path):
+    # stage="designed" (e.g. --no-validate): no validation ran at all, so
+    # the header must not claim a validation status.
+    out_path = tmp_path / "design.md"
+    with patch("systemiq.httpx.post", return_value=make_response(200, DESIGNED_BODY)):
+        send_to_backend(DUMMY_TEXT, DUMMY_URL, out_path=str(out_path))
+
+    content = out_path.read_text(encoding="utf-8")
+    assert "validated by Jev" not in content
+    assert "validation skipped" not in content
+
+
+def test_max_revisions_flag_is_sent_to_backend_payload():
+    from systemiq import main
+
+    captured_payload = {}
+
+    def capture_post(url, *, json, **kwargs):
+        captured_payload.update(json)
+        return make_response(200, SUCCESS_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", ["systemiq", "Build a to-do app", "--max-revisions", "2"]):
+            main()
+
+    assert captured_payload.get("max_revisions") == 2
+
+
+def test_no_validate_flag_stops_at_design_stage():
+    from systemiq import main
+
+    captured_payload = {}
+
+    def capture_post(url, *, json, **kwargs):
+        captured_payload.update(json)
+        return make_response(200, SUCCESS_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", ["systemiq", "Build a to-do app", "--no-validate"]):
+            main()
+
+    assert captured_payload.get("stage") == "design"
+
+
+def test_default_stage_is_validate():
+    from systemiq import main
+
+    captured_payload = {}
+
+    def capture_post(url, *, json, **kwargs):
+        captured_payload.update(json)
+        return make_response(200, SUCCESS_BODY)
+
+    with patch("systemiq.httpx.post", side_effect=capture_post):
+        with patch("sys.argv", ["systemiq", "Build a to-do app"]):
+            main()
+
+    assert captured_payload.get("stage") == "validate"
+    assert captured_payload.get("max_revisions") == 1
+
+
 # ── connection / transport errors ──────────────────────────────────────────────
 
 def test_connection_refused_prints_error_and_exits(capsys):
