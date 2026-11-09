@@ -116,6 +116,42 @@ def test_decision_adherence_strict_true_when_unnegated_mention_exists():
     assert result["decision_adherence_strict"] == 1.0
 
 
+def test_compound_choice_requires_every_part_to_be_present():
+    markdown = _headings_markdown({5: "We store data with PostgreSQL and PostGIS for geospatial queries."})
+    decisions = [{"id": "primary_database", "status": "accepted", "choice": "PostgreSQL + PostGIS", "probability": 0.8}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence"] == 1.0
+
+
+def test_compound_choice_fails_when_one_part_is_missing():
+    markdown = _headings_markdown({5: "We store data with PostgreSQL only."})
+    decisions = [{"id": "primary_database", "status": "accepted", "choice": "PostgreSQL + PostGIS", "probability": 0.8}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence"] == 0.0
+
+
+def test_modular_monolith_does_not_satisfy_plain_monolith_choice():
+    markdown = _headings_markdown({1: "A modular monolith architecture."})
+    decisions = [{"id": "architecture_style", "status": "accepted", "choice": "monolith", "probability": 0.8}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence"] == 0.0
+
+
+def test_negation_only_ignores_mentions_after_the_negation_word():
+    # "A monolith over microservices" -- monolith comes BEFORE "over" so it
+    # is kept; microservices comes after so it is ignored.
+    markdown = _headings_markdown({1: "A monolith over microservices."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_counts"]["architecture"]["monolith"] == 1
+    assert result["tech_counts"]["architecture"]["microservices"] == 0
+    assert result["tech_ignored"]["architecture"]["microservices"] == 1
+    assert result["tech_choices"]["architecture"] == "monolith"
+
+
 def test_revalidation_overrides_flagged_and_possible_for_repeat_1(tmp_path):
     revalidation_dir = tmp_path / "revalidation"
     revalidation_dir.mkdir()
@@ -611,7 +647,41 @@ def test_consistency_is_full_fraction_when_tech_choices_identical(_env):
 
     data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir)
 
-    assert data["consistency"][("idea1", "A")] == 1.0
+    # Was a bare 1.0 -- consistency is now {"agree", "determinate"} so the
+    # report can show "agreement k/m" next to the fraction.
+    assert data["consistency"][("idea1", "A")] == {"agree": 3, "determinate": 3}
+
+
+def test_consistency_is_n_a_when_all_categories_are_none_or_mixed(_env):
+    ideas_dir, runs_dir = _env
+    a_body = {
+        "design_markdown": _headings_markdown({}),  # no tech mentions anywhere -- every category is "none"
+        "design_warnings": [], "requirements": {},
+        "meta": {"llm_model": "x", "design_group_stats": [{"elapsed_seconds": 1.0}]},
+    }
+    _write_run(runs_dir, "idea1__A__r1", {"idea": "idea1", "version": "A", "repeat": 1}, a_body)
+    _write_run(runs_dir, "idea1__A__r2", {"idea": "idea1", "version": "A", "repeat": 2}, a_body)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir)
+
+    assert data["consistency"][("idea1", "A")] == "n/a"
+
+
+def test_consistency_excludes_a_none_category_but_keeps_determinate_ones(_env):
+    # architecture is "none" in both repeats (undetermined, excluded);
+    # api_style and database are determinate and identical.
+    ideas_dir, runs_dir = _env
+    a_body = {
+        "design_markdown": _headings_markdown({4: "REST", 5: "MongoDB"}),
+        "design_warnings": [], "requirements": {},
+        "meta": {"llm_model": "x", "design_group_stats": [{"elapsed_seconds": 1.0}]},
+    }
+    _write_run(runs_dir, "idea1__A__r1", {"idea": "idea1", "version": "A", "repeat": 1}, a_body)
+    _write_run(runs_dir, "idea1__A__r2", {"idea": "idea1", "version": "A", "repeat": 2}, a_body)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir)
+
+    assert data["consistency"][("idea1", "A")] == {"agree": 2, "determinate": 2}
 
 
 def _b_meta() -> dict:
@@ -663,6 +733,27 @@ def test_repeatability_table_reports_match_and_mismatch_across_repeats(_env):
     assert "## Jev decision repeatability" in report
     assert "api_style" in report
     assert report.isascii()
+
+
+def test_repeatability_includes_non_accepted_decisions_and_flags_a_status_flip(_env):
+    ideas_dir, runs_dir = _env
+    decisions_r1 = [{"id": "auth_approach", "status": "accepted", "choice": "JWT", "probability": 0.80}]
+    decisions_r2 = [{"id": "auth_approach", "status": "tentative", "choice": "JWT", "probability": 0.70}]
+    body_1 = {
+        "design_markdown": _headings_markdown({}), "design_warnings": [], "requirements": {}, "meta": _b_meta(),
+        "decisions": decisions_r1, "validation": [],
+    }
+    body_2 = {**body_1, "decisions": decisions_r2}
+    _write_run(runs_dir, "idea1__B__r1", {"idea": "idea1", "version": "B", "repeat": 1}, body_1)
+    _write_run(runs_dir, "idea1__B__r2", {"idea": "idea1", "version": "B", "repeat": 2}, body_2)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
+    row = data["repeatability"]["idea1"]["rows"][0]
+
+    assert row["id"] == "auth_approach"
+    assert row["match"] is True  # same choice both times
+    assert row["status_match"] is False  # accepted -> tentative
+    assert row["abs_diff"] == pytest.approx(0.10)
 
 
 def test_render_report_is_ascii_and_lists_ignored(_env):

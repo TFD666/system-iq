@@ -109,6 +109,10 @@ _NEGATION_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(p) for p in _NEGATION_PHRASES) + r")\b", re.IGNORECASE,
 )
 
+# A compound choice like "PostgreSQL + PostGIS" or "REST and GraphQL"
+# splits on any of these connectors; every part must be present.
+_COMPOUND_SPLIT_RE = re.compile(r"\+| and | with |,", re.IGNORECASE)
+
 # decision.id -> which section(s) are that decision's own, for
 # decision_adherence_in_designated_section (api_style 4, database 5,
 # architecture 1 or 2 -- only decisions that map to a TECH_CATEGORIES slot).
@@ -336,18 +340,18 @@ def _number_is_supported(value: int, idea_text: str, requirements: dict) -> bool
     return False
 
 
-def _sentence_around(text: str, pos: int) -> str:
-    """The sentence (bounded by . ! ? or newline) containing char offset pos."""
-    left = max((text.rfind(ch, 0, pos) for ch in ".!?\n"), default=-1) + 1
-    right_candidates = [c for ch in ".!?\n" if (c := text.find(ch, pos)) != -1]
-    right = min(right_candidates) if right_candidates else len(text)
-    return text[left:right]
+def _sentence_start(text: str, pos: int) -> int:
+    """Start offset of the sentence (bounded by . ! ? or newline) containing pos."""
+    return max((text.rfind(ch, 0, pos) for ch in ".!?\n"), default=-1) + 1
 
 
 def _is_negated_mention(text: str, pos: int) -> bool:
-    """True when the sentence containing this match rejects/compares the
-    tech rather than choosing it (e.g. "avoids microservices")."""
-    return bool(_NEGATION_RE.search(_sentence_around(text, pos)))
+    """True when a negation word (see _NEGATION_PHRASES) appears BEFORE this
+    match in the same sentence -- a mention a negation word comes after is
+    kept (e.g. "A monolith over microservices" keeps monolith, ignores
+    microservices)."""
+    sentence_start = _sentence_start(text, pos)
+    return bool(_NEGATION_RE.search(text[sentence_start:pos]))
 
 
 def _finditer_excluding_negated(pattern: str, text: str) -> tuple[list[re.Match], int]:
@@ -473,21 +477,44 @@ def _tech_choices(markdown: str) -> tuple[dict, dict, dict, dict]:
     return choices, counts_by_category, scope_by_category, ignored_by_category
 
 
-def _choice_has_unnegated_mention(choice: str, text: str) -> bool:
-    """True when `choice` appears at least once in `text` in a sentence
-    that has none of the negation words (see _NEGATION_PHRASES)."""
-    return any(
-        not _is_negated_mention(text, m.start())
-        for m in re.finditer(re.escape(choice), text, re.IGNORECASE)
-    )
+def _part_present(part: str, text: str, require_unnegated: bool) -> bool:
+    """Whole-word presence of one compound-option part in `text`. "monolith"
+    only counts when not preceded by "modular " (so it never matches inside
+    "modular monolith"); any other part is a plain whole-word/phrase match.
+    With require_unnegated, only a match with no negation word before it in
+    its sentence counts."""
+    if part.lower() == "monolith":
+        for m in re.finditer(r"\bmonolith\b", text, re.IGNORECASE):
+            if re.search(r"modular\s*$", text[:m.start()], re.IGNORECASE):
+                continue
+            if require_unnegated and _is_negated_mention(text, m.start()):
+                continue
+            return True
+        return False
+
+    for m in re.finditer(r"\b" + re.escape(part) + r"\b", text, re.IGNORECASE):
+        if require_unnegated and _is_negated_mention(text, m.start()):
+            continue
+        return True
+    return False
+
+
+def _choice_present(choice: str, text: str, require_unnegated: bool = False) -> bool:
+    """A (possibly compound, e.g. "PostgreSQL + PostGIS") choice counts as
+    present only when EVERY part is present (see _part_present)."""
+    parts = [p.strip() for p in _COMPOUND_SPLIT_RE.split(choice) if p.strip()]
+    if not parts:
+        return False
+    return all(_part_present(part, text, require_unnegated) for part in parts)
 
 
 def _decision_adherence(decisions: list | None, markdown: str) -> tuple[float | str, float | str, float | str]:
     """Returns (adherence, adherence_strict, adherence_in_designated_section).
     All three are computed over sections 1-12 only -- section 13 is
     code-generated from the decisions and would pass by construction.
-    `adherence` is the main number (plain substring match, no negation
-    filter); `adherence_strict` additionally requires an unnegated mention."""
+    `adherence` is the main number (every part of a compound choice present,
+    no negation filter); `adherence_strict` additionally requires each part
+    to have an unnegated mention."""
     if not decisions:
         return "n/a", "n/a", "n/a"
     accepted = [d for d in decisions if d.get("status") == "accepted" and d.get("choice")]
@@ -495,11 +522,10 @@ def _decision_adherence(decisions: list | None, markdown: str) -> tuple[float | 
         return "n/a", "n/a", "n/a"
 
     sections_1_12_text = _sections_1_12_text(markdown)
-    sections_1_12_lower = sections_1_12_text.lower()
-    hits = sum(1 for d in accepted if d["choice"].lower() in sections_1_12_lower)
+    hits = sum(1 for d in accepted if _choice_present(d["choice"], sections_1_12_text))
     adherence = hits / len(accepted)
 
-    strict_hits = sum(1 for d in accepted if _choice_has_unnegated_mention(d["choice"], sections_1_12_text))
+    strict_hits = sum(1 for d in accepted if _choice_present(d["choice"], sections_1_12_text, require_unnegated=True))
     adherence_strict = strict_hits / len(accepted)
 
     designated = [d for d in accepted if d["id"] in _DECISION_DESIGNATED_SECTIONS]
@@ -642,36 +668,45 @@ def _mean(values: list) -> float | str:
 def _decision_repeatability(b_runs: list[dict]) -> dict | str:
     """
     For an idea's B runs (repeat >= 2 required -- "n/a" otherwise): per
-    accepted decision id, the choice and probability from each repeat
-    that accepted it, whether all those choices match, and the spread
-    (max - min) of their probabilities. Plus a summary: fraction of
-    decision ids where every repeat agreed, and the mean probability
-    spread across decision ids.
+    choice decision id (any status, not just "accepted"), the choice,
+    status and probability from each repeat, whether the choices match,
+    whether the statuses match, and the probability spread (max - min).
+    Plus a summary: choice agreement, status agreement, and mean
+    probability spread, all across decision ids.
     """
     if len(b_runs) < 2:
         return "n/a"
 
-    by_decision: dict[str, dict[int, tuple[str, float]]] = {}
+    by_decision: dict[str, dict[int, dict]] = {}
     for r in b_runs:
         for d in (r.get("decisions") or []):
-            if d.get("status") == "accepted" and d.get("choice") and d.get("probability") is not None:
-                by_decision.setdefault(d["id"], {})[r["repeat"]] = (d["choice"], d["probability"])
+            if d.get("choice") and d.get("probability") is not None:
+                by_decision.setdefault(d["id"], {})[r["repeat"]] = {
+                    "choice": d["choice"], "status": d.get("status"), "probability": d["probability"],
+                }
 
     rows = []
-    agree_count = 0
+    choice_agree = 0
+    status_agree = 0
     abs_diffs = []
     for decision_id, by_repeat in sorted(by_decision.items()):
         repeats = sorted(by_repeat)
-        choices = [by_repeat[rep][0] for rep in repeats]
-        probabilities = [by_repeat[rep][1] for rep in repeats]
-        match = len(set(choices)) == 1
+        entries = [by_repeat[rep] for rep in repeats]
+        choices = [e["choice"] for e in entries]
+        statuses = [e["status"] for e in entries]
+        probabilities = [e["probability"] for e in entries]
+        choice_match = len(set(choices)) == 1
+        status_match = len(set(statuses)) == 1
         abs_diff = max(probabilities) - min(probabilities) if len(probabilities) > 1 else 0.0
         rows.append({
-            "id": decision_id, "repeats": repeats, "choices": choices,
-            "probabilities": probabilities, "match": match, "abs_diff": abs_diff,
+            "id": decision_id, "repeats": repeats, "choices": choices, "statuses": statuses,
+            "probabilities": probabilities, "match": choice_match, "status_match": status_match,
+            "abs_diff": abs_diff,
         })
-        if match:
-            agree_count += 1
+        if choice_match:
+            choice_agree += 1
+        if status_match:
+            status_agree += 1
         abs_diffs.append(abs_diff)
 
     if not rows:
@@ -679,7 +714,8 @@ def _decision_repeatability(b_runs: list[dict]) -> dict | str:
 
     return {
         "rows": rows,
-        "agreement": agree_count / len(rows),
+        "agreement": choice_agree / len(rows),
+        "status_agreement": status_agree / len(rows),
         "mean_abs_diff": sum(abs_diffs) / len(abs_diffs),
     }
 
@@ -743,11 +779,17 @@ def score(
             consistency[(idea, version)] = "n/a"
             continue
         agree = 0
+        determinate = 0
         for category in TECH_CATEGORIES:
             values = {r["tech_choices"][category] for r in group}
+            if values & {"none", "mixed"}:
+                continue  # undetermined in at least one repeat -- not comparable
+            determinate += 1
             if len(values) == 1:
                 agree += 1
-        consistency[(idea, version)] = agree / len(TECH_CATEGORIES)
+        consistency[(idea, version)] = (
+            {"agree": agree, "determinate": determinate} if determinate else "n/a"
+        )
 
     ideas = sorted({r["idea"] for r in runs})
 
@@ -771,6 +813,13 @@ def _fmt(value) -> str:
     if isinstance(value, float):
         return f"{value:.2f}"
     return str(value)
+
+
+def _fmt_consistency(value) -> str:
+    if value == "n/a":
+        return "n/a"
+    agree, determinate = value["agree"], value["determinate"]
+    return f"{agree / determinate:.2f} ({agree}/{determinate})"
 
 
 def render_report(data: dict) -> str:
@@ -885,12 +934,15 @@ def render_report(data: dict) -> str:
         lines.append("none")
         lines.append("")
 
-    lines.append("## Consistency across repeats (fraction of tech categories identical)")
+    lines.append("## Consistency across repeats (fraction of determinate tech categories identical)")
+    lines.append("")
+    lines.append("\"none\"/\"mixed\" choices are undetermined and excluded from the comparison; "
+                  "\"n/a\" means no category was determinate in every repeat.")
     lines.append("")
     lines.append("| idea | version | consistency |")
     lines.append("|---|---|---|")
     for (idea, version), value in sorted(data["consistency"].items()):
-        lines.append(f"| {idea} | {version} | {_fmt(value)} |")
+        lines.append(f"| {idea} | {version} | {_fmt_consistency(value)} |")
     lines.append("")
 
     lines.append("## Jev decision repeatability (idea, >=2 B repeats)")
@@ -903,14 +955,20 @@ def render_report(data: dict) -> str:
             lines.append("n/a")
             lines.append("")
             continue
-        lines.append("| decision_id | choices (by repeat) | probabilities (by repeat) | match | abs_prob_diff |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| decision_id | choices (by repeat) | statuses (by repeat) | "
+                      "probabilities (by repeat) | match | status_match | abs_prob_diff |")
+        lines.append("|---|---|---|---|---|---|---|")
         for row in rep["rows"]:
             choices_str = ",".join(row["choices"])
+            statuses_str = ",".join(str(s) for s in row["statuses"])
             probs_str = ",".join(f"{p:.2f}" for p in row["probabilities"])
-            lines.append(f"| {row['id']} | {choices_str} | {probs_str} | {row['match']} | {row['abs_diff']:.2f} |")
+            lines.append(
+                f"| {row['id']} | {choices_str} | {statuses_str} | {probs_str} | "
+                f"{row['match']} | {row['status_match']} | {row['abs_diff']:.2f} |"
+            )
         lines.append(
-            f"agreement={_fmt(rep['agreement'])} mean_abs_prob_diff={_fmt(rep['mean_abs_diff'])}"
+            f"agreement={_fmt(rep['agreement'])} status_agreement={_fmt(rep['status_agreement'])} "
+            f"mean_abs_prob_diff={_fmt(rep['mean_abs_diff'])}"
         )
         lines.append("")
 
