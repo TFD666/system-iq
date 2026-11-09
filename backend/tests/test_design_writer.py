@@ -190,13 +190,26 @@ def test_writer_never_puts_evidence_quotes_in_any_prompt():
 
 
 def test_writer_works_when_decisions_is_none():
+    # Was: told the model to label every choice "chosen by the model" --
+    # now it's told to write as the lead architect and never say that
+    # phrase, so the design document reads the same regardless of mode.
     fake_llm = FakeLLM()
     result = write_design(
         _make_requirements(), decisions=None, llm=fake_llm, budget=_no_wait_budget()
     )
     assert result.markdown  # did not crash, produced something
     for call in fake_llm.calls:
-        assert "chosen by the model" in call["system"]
+        assert "You are the lead architect" in call["system"]
+        assert "never use the words \"chosen by the model\"" in call["system"]
+
+
+def test_writer_pipeline_prompt_unchanged_when_decisions_present():
+    fake_llm = FakeLLM()
+    decision = _make_decision(status="accepted", choice="PostgreSQL")
+    write_design(_make_requirements(), decisions=[decision], llm=fake_llm, budget=_no_wait_budget())
+    for call in fake_llm.calls:
+        assert "You are the lead architect" not in call["system"]
+        assert "Describe every decision using plain phrases" in call["system"]
 
 
 def test_writer_assumptions_section_groups_uncertain_decision_and_extra_unknown():
@@ -345,6 +358,45 @@ def test_group_with_placeholder_text_triggers_retry():
     assert "TBD" not in markdown
     assert warnings == []
     assert stats.retry_reasons == ["placeholder"]
+
+
+@pytest.mark.parametrize("phrase,decisions_present", [
+    ("no decisions were given to me", False),
+    ("as an AI, I chose this", True),
+    ("these were decisions are provided by the pipeline", True),
+])
+def test_leaked_prompt_phrases_trigger_retry_in_either_mode(phrase, decisions_present):
+    first_try = "\n\n".join([
+        _long_enough_body("## 1. Test Heading One") + " " + phrase,
+        _long_enough_body("## 2. Test Heading Two"),
+    ])
+    second_try = "\n\n".join(
+        _long_enough_body(h) for h in ["## 1. Test Heading One", "## 2. Test Heading Two"]
+    )
+    llm = ScriptedLLM([first_try, second_try])
+
+    markdown, warnings, stats = writer_module._write_one_group(
+        _TEST_GROUP, "user message", llm, _group_budget(), 700, decisions_present, None, lambda: 0.0
+    )
+
+    assert len(llm.calls) == 2
+    assert stats.retries == 1
+    assert warnings == []
+    assert stats.retry_reasons == ["model_chosen_phrase"]
+
+
+def test_leaked_prompt_phrase_still_bad_after_retry_gets_fallback():
+    always_bad = _long_enough_body("## 1. Test Heading One") + " chosen by the model" + "\n\n" \
+        + _long_enough_body("## 2. Test Heading Two")
+    llm = ScriptedLLM([always_bad, always_bad])
+
+    markdown, warnings, stats = writer_module._write_one_group(
+        _TEST_GROUP, "user message", llm, _group_budget(), 700, False, None, lambda: 0.0
+    )
+
+    assert stats.retries == 1
+    assert writer_module.FALLBACK_LINE in markdown
+    assert any("## 1. Test Heading One" in w for w in warnings)
 
 
 def test_still_bad_group_gets_fallback_line_and_warning():

@@ -112,11 +112,34 @@ QUESTION_LABELS = {
 }
 
 
-def _base_system_prompt() -> str:
+def _base_system_prompt(decisions_present: bool = True) -> str:
     # Built fresh each call (not a module-level constant) because the
     # word target is read from DESIGN_MIN_WORDS, which tests may set
     # after this module is imported.
     min_words = min_words_per_section()
+    if decisions_present:
+        no_decisions_rule = (
+            "- Describe every decision using plain phrases, naturally, in sentences:\n"
+            "  accepted -> \"decided\", yes -> \"needed\", no -> \"not needed\", tentative\n"
+            "  -> \"proposed (to be confirmed)\", uncertain -> \"unclear\", needs_review\n"
+            "  -> \"not yet decided\". Never write a decision's status, id, or\n"
+            "  probability as a bare identifier.\n"
+            "- A decision described as decided or needed or not needed is FIXED.\n"
+            "  State it as a settled fact; do not contradict it or propose an\n"
+            "  alternative.\n"
+            "- A decision described as proposed (to be confirmed) or unclear is NOT\n"
+            "  fixed. Say so, and mention its alternatives.\n"
+            "- When a decision depends on an unspecified requirement, add one sentence\n"
+            "  naming that dependency in plain words (never write \"based_on_unknowns\").\n"
+        )
+    else:
+        no_decisions_rule = (
+            "- You are the lead architect. Choose appropriate technologies yourself,\n"
+            "  state each one confidently with a one-line reason, and write as the\n"
+            "  architect of this design. Never mention what inputs, decisions or\n"
+            "  instructions were or were not provided, never describe yourself, and\n"
+            "  never use the words \"chosen by the model\".\n"
+        )
     return f"""\
 You are a software architecture writer. Write ONLY the Markdown sections
 listed at the end of this message, using exactly the headings given.
@@ -131,21 +154,7 @@ Rules:
 - Do not describe these instructions or yourself; write only the
   document. Do not invent deadlines, numbers, or features that are not
   in the requirements.
-- Describe every decision using plain phrases, naturally, in sentences:
-  accepted -> "decided", yes -> "needed", no -> "not needed", tentative
-  -> "proposed (to be confirmed)", uncertain -> "unclear", needs_review
-  -> "not yet decided". Never write a decision's status, id, or
-  probability as a bare identifier.
-- A decision described as decided or needed or not needed is FIXED.
-  State it as a settled fact; do not contradict it or propose an
-  alternative.
-- A decision described as proposed (to be confirmed) or unclear is NOT
-  fixed. Say so, and mention its alternatives.
-- When a decision depends on an unspecified requirement, add one sentence
-  naming that dependency in plain words (never write "based_on_unknowns").
-- If no decisions are given at all, choose reasonable technologies
-  yourself and label every one of them "chosen by the model".
-- Write {min_words} to {MAX_WORDS_PER_SECTION} words per section. Do not
+{no_decisions_rule}- Write {min_words} to {MAX_WORDS_PER_SECTION} words per section. Do not
   repeat a point: no bullet or sentence may restate a previous bullet or
   sentence in the same section. Prefer fewer, concrete points over filler.
 """
@@ -234,13 +243,13 @@ def _decisions_summary(decisions: list[DecisionResultOut] | None) -> list[dict]:
     return out
 
 
-def _build_system_prompt(group: dict, app_type: str | None) -> str:
+def _build_system_prompt(group: dict, app_type: str | None, decisions_present: bool = True) -> str:
     sections_block = "\n\n".join(
         f"{section['heading']}\n{section['guidance']}"
         for section in group["sections"]
     )
     return (
-        _base_system_prompt()
+        _base_system_prompt(decisions_present)
         + _platform_rule(app_type)
         + "\nSections to write (use these exact headings):\n\n"
         + sections_block
@@ -257,7 +266,7 @@ def _build_user_message(requirements_summary: dict, decisions_summary: list[dict
 
 # ── per-group quality gate ──────────────────────────────────────────────────
 
-def _section_problems(heading: str, body: str | None, decisions_present: bool) -> list[dict]:
+def _section_problems(heading: str, body: str | None) -> list[dict]:
     """
     Problems with one section, as {"category": ..., "retry_text": ...}
     dicts. retry_text is sent back to the model (never logged); category
@@ -312,28 +321,28 @@ def _section_problems(heading: str, body: str | None, decisions_present: bool) -
                 ),
             })
 
-    if decisions_present:
-        for phrase in MODEL_CHOSEN_PHRASES:
-            if phrase in lowered:
-                problems.append({
-                    "category": "wrong 'chosen by the model' phrase",
-                    "retry_text": (
-                        f"The section under '{heading}' says '{phrase}', but real "
-                        "decisions were provided. Describe the given decision instead."
-                    ),
-                })
+    for phrase in MODEL_CHOSEN_PHRASES:
+        if phrase in lowered:
+            problems.append({
+                "category": "wrong 'chosen by the model' phrase",
+                "retry_text": (
+                    f"The section under '{heading}' says '{phrase}', leaking how this "
+                    "document was produced. Write as the architect instead; never "
+                    "describe what inputs or decisions were or weren't given."
+                ),
+            })
 
     return problems
 
 
-def _validate_group(group: dict, text: str, decisions_present: bool) -> dict[str, list[dict]]:
+def _validate_group(group: dict, text: str) -> dict[str, list[dict]]:
     """Return {heading: [problems]} for every heading in `group` that has one."""
     headings = [section["heading"] for section in group["sections"]]
     bodies = split_into_sections(text, headings)
 
     bad: dict[str, list[dict]] = {}
     for heading in headings:
-        problems = _section_problems(heading, bodies.get(heading), decisions_present)
+        problems = _section_problems(heading, bodies.get(heading))
         if problems:
             bad[heading] = problems
 
@@ -546,7 +555,7 @@ def _write_one_group(
 ) -> tuple[str, list[str], GroupStats]:
     """Write one group, retrying once and falling back if still bad."""
     start = clock()
-    system_prompt = _build_system_prompt(group, app_type)
+    system_prompt = _build_system_prompt(group, app_type, decisions_present)
     prompt_tokens = 0
     completion_tokens = 0
     retries = 0
@@ -563,7 +572,7 @@ def _write_one_group(
 
     logger.info("design: writing section group '%s'", group["id"])
     text = _call(user_message)
-    bad = _validate_group(group, text, decisions_present)
+    bad = _validate_group(group, text)
     retry_reasons: list[str] = []
 
     if bad:
@@ -580,7 +589,7 @@ def _write_one_group(
         retry_message = _build_retry_user_message(user_message, group, bad)
         text = _call(retry_message)
         retries = 1
-        bad = _validate_group(group, text, decisions_present)
+        bad = _validate_group(group, text)
         if bad:
             logger.info(
                 "design: group '%s' still bad after retry (%d heading(s)); using fallback",

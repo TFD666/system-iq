@@ -29,9 +29,18 @@ WITHIN_N_DEADLINE_RE = re.compile(
     r"within\s+\d+\s+(day|days|week|weeks|month|months)", re.IGNORECASE
 )
 
-# Said only when decisions WERE provided but the model still claims it
-# picked the technology itself.
-MODEL_CHOSEN_PHRASES = ("model chosen", "chosen by the model")
+# Phrases that leak the prompt/pipeline mechanics into the document, in
+# either mode -- the model must write as the architect, never describe
+# what it was or wasn't given.
+MODEL_CHOSEN_PHRASES = (
+    "model chosen",
+    "chosen by the model",
+    "decisions are provided",
+    "no decisions",
+    "decisions were provided",
+    "as an ai",
+    "provided to me",
+)
 
 
 def split_into_sections(markdown: str, headings: list[str]) -> dict[str, str | None]:

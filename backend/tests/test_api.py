@@ -116,6 +116,17 @@ class DesignRateLimitedProvider(LLMProvider):
         raise RateLimitError("Groq rate limit hit and retries exhausted.")
 
 
+class CrashingDesignProvider(LLMProvider):
+    """Succeeds at extraction, but raises an unexpected error while writing
+    the design -- proves an arbitrary exception becomes a clean 500, not a
+    500 with a traceback or an uncaught crash."""
+    def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        return LLMResult(text=VALID_JSON, prompt_tokens=10, completion_tokens=20)
+
+    def complete_text(self, system: str, user: str, max_tokens: int) -> LLMResult:
+        raise RuntimeError("super secret design text that must never leak into a log or response")
+
+
 # ── TestClient factory ─────────────────────────────────────────────────────────
 
 def make_client(provider: LLMProvider) -> TestClient:
@@ -415,6 +426,65 @@ def test_llm_only_mode_response_shape_matches_pipeline_designed_stage():
     assert set(pipeline_response.json().keys()) == set(llm_only_response.json().keys())
     # mode=llm_only always stops at "designed" even if stage asked for more.
     assert llm_only_response.json()["stage"] == "designed"
+
+
+def test_unexpected_error_while_writing_design_becomes_clean_500(caplog):
+    import logging
+    client = make_client(CrashingDesignProvider())
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/design", json={"idea": "Build a to-do app", "stage": "design"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal error while writing the design. Try again."
+    for record in caplog.records:
+        assert "super secret design text" not in record.getMessage()
+    assert any("RuntimeError" in record.getMessage() for record in caplog.records)
+
+
+def test_unexpected_error_while_writing_llm_only_design_becomes_clean_500(caplog):
+    import logging
+    client = make_client(CrashingDesignProvider())
+    with caplog.at_level(logging.ERROR):
+        response = client.post(
+            "/design", json={"idea": "Build a to-do app", "mode": "llm_only"}
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal error while writing the design. Try again."
+    for record in caplog.records:
+        assert "super secret design text" not in record.getMessage()
+
+
+class _CrashingValidationDecisionProvider(DecisionProvider):
+    """Succeeds at the decide step, but raises an unexpected error on the
+    validate stage's decide() call (identified by its val_* question ids)."""
+    def decide(self, state, questions) -> DecisionResultSet:
+        if any(q.id.startswith("val_") for q in questions):
+            raise RuntimeError("super secret design text that must never leak into a log or response")
+        decisions: dict[str, Decision] = {}
+        for q in questions:
+            if q.kind == "choice":
+                option = q.options[0] if q.options else "X"
+                decisions[q.id] = Decision(id=q.id, kind="choice", choice=option, probability=0.9)
+            else:
+                decisions[q.id] = Decision(id=q.id, kind="noul", probability=0.1)
+        return DecisionResultSet(
+            decisions=decisions, model="scripted", input_tokens=5, output_tokens=5,
+            billing_source="free", cost=0.0,
+        )
+
+
+def test_unexpected_error_during_validation_becomes_clean_500(caplog):
+    import logging
+    client = make_client_with_decision(GoodProviderWithDesign(), _CrashingValidationDecisionProvider())
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/design", json={"idea": "Build a to-do app"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal error during validation. Try again."
+    for record in caplog.records:
+        assert "super secret design text" not in record.getMessage()
+    assert any("RuntimeError" in record.getMessage() for record in caplog.records)
 
 
 def test_no_validation_text_or_design_text_in_logs(caplog):

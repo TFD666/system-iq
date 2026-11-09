@@ -41,15 +41,36 @@ except Exception:
             bodies[h] = markdown[body_start:body_end].strip()
         return bodies
 
-TECH_CATEGORIES = {
-    "api_style": ["REST", "GraphQL", "gRPC"],
-    "database": ["PostgreSQL", "MySQL", "MongoDB", "DynamoDB", "SQLite", "Firebase"],
-    "architecture": ["monolith", "microservices", "serverless", "modular monolith"],
+# category -> {term: [synonyms]}. "architecture" is handled specially
+# (see _category_counts) because "modular monolith" must never also add
+# to plain "monolith". Redis is deliberately not a database term here.
+_API_STYLE_TERMS = {"REST": ["REST", "RESTful"], "GraphQL": ["GraphQL"], "gRPC": ["gRPC"]}
+_DATABASE_TERMS = {
+    "PostgreSQL": ["PostgreSQL", "Postgres", "PostGIS"],
+    "MySQL": ["MySQL"],
+    "MongoDB": ["MongoDB", "Mongo"],
+    "DynamoDB": ["DynamoDB", "Dynamo"],
+    "SQLite": ["SQLite"],
+    "Firebase": ["Firebase"],
 }
+TECH_CATEGORIES = ("api_style", "database", "architecture")
 
 _ATTACHED_UNITS = ("ms", "gb", "mb", "tb")
-_WORD_UNITS = ("users", "requests", "rps", "percent")
+_WORD_UNITS = (
+    "users", "requests", "rps", "seconds", "percent",
+    "sellers", "patients", "members", "sensors", "doctors", "devices", "rows", "items",
+)
 _NUMBER_RE = re.compile(r"\d[\d,]*\.?\d*")
+_NUMBER_WORDS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    "hundred", "thousand", "million", "billion",
+)
+_WRITTEN_NUMBER_RE = re.compile(
+    r"\b(?:" + "|".join(_NUMBER_WORDS) + r")(?:[\s-](?:" + "|".join(_NUMBER_WORDS) + r"))*\b",
+    re.IGNORECASE,
+)
 _ASSUMPTION_TOKENS = ("unspecified", "not specified", "not stated", "assum")
 _LEAK_PHRASES = ("decisions are provided", "no decisions", "decisions were provided")
 
@@ -92,21 +113,27 @@ def _sections_1_12_text(markdown: str) -> str:
     return "\n".join(bodies.get(h) or "" for h in headings[:12])
 
 
+def _has_unit_nearby(tail: str) -> bool:
+    if tail.startswith("%"):
+        return True
+    attached = re.match(r"[a-zA-Z]+", tail.lower())
+    if attached and attached.group(0) in _ATTACHED_UNITS:
+        return True
+    following = " ".join(tail.split()[:3]).lower()
+    return any(u in following for u in _WORD_UNITS) or "per second" in following
+
+
 def _numeric_claims(text: str) -> list[str]:
+    """Every number (digits or spelled out, e.g. "ten thousand") followed
+    within ~3 words by a unit word -- a numeric claim, not yet checked
+    against the idea/requirements for support."""
     claims = []
     for m in _NUMBER_RE.finditer(text):
-        number = m.group(0)
-        tail = text[m.end():m.end() + 20]
-        if tail.startswith("%"):
-            claims.append(number)
-            continue
-        attached = re.match(r"[a-zA-Z]+", tail.lower())
-        if attached and attached.group(0) in _ATTACHED_UNITS:
-            claims.append(number)
-            continue
-        following = " ".join(tail.split()[:3]).lower()
-        if any(u in following for u in _WORD_UNITS) or "per second" in following:
-            claims.append(number)
+        if _has_unit_nearby(text[m.end():m.end() + 20]):
+            claims.append(m.group(0))
+    for m in _WRITTEN_NUMBER_RE.finditer(text):
+        if _has_unit_nearby(text[m.end():m.end() + 20]):
+            claims.append(m.group(0))
     return claims
 
 
@@ -122,17 +149,41 @@ def _number_is_supported(number: str, idea_text: str, requirements: dict) -> boo
     return False
 
 
-def _tech_choices(sections_text: str) -> dict:
-    choices = {}
-    for category, terms in TECH_CATEGORIES.items():
-        counts = {
-            term: len(re.findall(r"\b" + re.escape(term) + r"\b", sections_text, re.IGNORECASE))
-            for term in terms
+def _term_count(synonyms: list[str], text: str) -> int:
+    return sum(len(re.findall(r"\b" + re.escape(syn) + r"\b", text, re.IGNORECASE)) for syn in synonyms)
+
+
+def _category_counts(category: str, text: str) -> dict[str, int]:
+    if category == "architecture":
+        modular_count = len(re.findall(r"\bmodular\s+monolith\b", text, re.IGNORECASE))
+        monolith_total = len(re.findall(r"\bmonolith\b", text, re.IGNORECASE))
+        return {
+            "modular monolith": modular_count,
+            "monolith": monolith_total - modular_count,  # never double-counted with the above
+            "microservices": len(re.findall(r"\bmicroservices?\b", text, re.IGNORECASE)),
+            "serverless": len(re.findall(r"\bserverless\b", text, re.IGNORECASE)),
         }
-        best = max(counts.values()) if counts else 0
-        winners = [term for term, c in counts.items() if c == best]
-        choices[category] = winners[0] if (best > 0 and len(winners) == 1) else "none"
-    return choices
+    synonyms_by_term = _API_STYLE_TERMS if category == "api_style" else _DATABASE_TERMS
+    return {term: _term_count(syns, text) for term, syns in synonyms_by_term.items()}
+
+
+def _tech_choices(sections_text: str) -> tuple[dict, dict]:
+    """Returns (choices, counts) -- the winning term (or "mixed"/"none")
+    and the raw per-term counts, both per category."""
+    choices: dict[str, str] = {}
+    counts: dict[str, dict[str, int]] = {}
+    for category in TECH_CATEGORIES:
+        category_counts = _category_counts(category, sections_text)
+        counts[category] = category_counts
+        best = max(category_counts.values()) if category_counts else 0
+        winners = [term for term, c in category_counts.items() if c == best]
+        if best == 0:
+            choices[category] = "none"
+        elif len(winners) > 1:
+            choices[category] = "mixed"
+        else:
+            choices[category] = winners[0]
+    return choices, counts
 
 
 def _decision_adherence(decisions: list | None, markdown: str) -> float | str:
@@ -164,6 +215,7 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
     sections_text_lower = sections_text.lower()
 
     claims = _numeric_claims(sections_text)
+    numeric_claims = len(claims)
     unsupported_numbers = sum(
         1 for n in claims if not _number_is_supported(n, idea_text, body.get("requirements") or {})
     )
@@ -171,7 +223,7 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
     assumption_mentions = sum(sections_text_lower.count(tok) for tok in _ASSUMPTION_TOKENS)
     leak_hits = sum(sections_text_lower.count(p) for p in _LEAK_PHRASES)
 
-    tech_choices = _tech_choices(sections_text)
+    tech_choices, tech_counts = _tech_choices(sections_text)
 
     group_stats = meta.get("design_group_stats") or []
     elapsed_seconds = sum(stat.get("elapsed_seconds") or 0 for stat in group_stats)
@@ -206,6 +258,8 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
         "jargon_hits": jargon_hits,
         "decision_adherence": decision_adherence,
         "tech_choices": tech_choices,
+        "tech_counts": tech_counts,
+        "numeric_claims": numeric_claims,
         "unsupported_numbers": unsupported_numbers,
         "assumption_mentions": assumption_mentions,
         "leak_hits": leak_hits,
@@ -226,7 +280,7 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
 
 _NUMERIC_METRIC_KEYS = (
     "sections_found", "fallback_lines", "design_warnings", "placeholder_hits", "jargon_hits",
-    "unsupported_numbers", "assumption_mentions", "leak_hits", "retries",
+    "numeric_claims", "unsupported_numbers", "assumption_mentions", "leak_hits", "retries",
     "design_prompt_tokens", "design_completion_tokens",
     "elapsed_seconds", "jev_requests", "jev_input_tokens", "jev_output_tokens",
     "flagged_count", "possible_count",
@@ -326,16 +380,22 @@ def render_report(data: dict) -> str:
         lines.append("")
         lines.append("| version | repeat | sections_found | fallback_lines | warnings | "
                       "placeholder_hits | jargon_hits | leak_hits | retries | decision_adherence | "
-                      "unsupported_numbers | assumption_mentions | tech_choices | jev_requests |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+                      "numeric_claims | unsupported_numbers | assumption_mentions | tech_choices | "
+                      "tech_counts | jev_requests |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for version in ("A", "B"):
             for r in data["by_idea_version"].get((idea, version), []):
                 tech = ", ".join(f"{k}={v}" for k, v in r["tech_choices"].items())
+                tech_counts = "; ".join(
+                    ",".join(f"{term}={c}" for term, c in counts.items() if c > 0) or "-"
+                    for counts in r["tech_counts"].values()
+                )
                 lines.append(
                     f"| {r['version']} | {r['repeat']} | {r['sections_found']} | {r['fallback_lines']} | "
                     f"{r['design_warnings']} | {r['placeholder_hits']} | {r['jargon_hits']} | "
                     f"{r['leak_hits']} | {r['retries']} | {_fmt(r['decision_adherence'])} | "
-                    f"{r['unsupported_numbers']} | {r['assumption_mentions']} | {tech} | {r['jev_requests']} |"
+                    f"{r['numeric_claims']} | {r['unsupported_numbers']} | {r['assumption_mentions']} | "
+                    f"{tech} | {tech_counts} | {r['jev_requests']} |"
                 )
         lines.append("")
 

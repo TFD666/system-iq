@@ -281,7 +281,35 @@ def design(
 
     # ── llm_only baseline: design with no decisions at all, no Jev call ─────
     if request.mode == "llm_only":
-        design_result = write_design(requirements, None, llm, TokenBudget())
+        try:
+            design_result = write_design(requirements, None, llm, TokenBudget())
+
+        except RateLimitError:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Rate limit reached while writing the design. Please wait a moment and try again."
+                },
+            )
+
+        except GroqAuthError:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "detail": (
+                        "LLM service rejected the API key. Check GROQ_API_KEY in "
+                        "backend/.env and restart the server."
+                    )
+                },
+            )
+
+        except Exception as e:
+            logger.error("design: unexpected error while writing the design (%s)", type(e).__name__)
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal error while writing the design. Try again."},
+            )
+
         return DesignResponse(
             stage="designed",
             requirements=requirements,
@@ -415,6 +443,13 @@ def design(
             },
         )
 
+    except Exception as e:
+        logger.error("design: unexpected error while writing the design (%s)", type(e).__name__)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal error while writing the design. Try again."},
+        )
+
     meta_kwargs["llm_model"] = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
     meta_kwargs["design_prompt_tokens"] = design_result.prompt_tokens
     meta_kwargs["design_completion_tokens"] = design_result.completion_tokens
@@ -425,6 +460,7 @@ def design(
             completion_tokens=stat.completion_tokens,
             retries=stat.retries,
             elapsed_seconds=stat.elapsed_seconds,
+            retry_reasons=stat.retry_reasons,
         )
         for stat in design_result.group_stats
     ]
@@ -441,10 +477,17 @@ def design(
 
     # ── Step 6: validate the design, revising flagged sections ──────────────
     # (stage == "validate", the default)
-    run = run_validation_loop(
-        requirements, decision_results, design_result.markdown, request.max_revisions,
-        llm, decision_provider,
-    )
+    try:
+        run = run_validation_loop(
+            requirements, decision_results, design_result.markdown, request.max_revisions,
+            llm, decision_provider,
+        )
+    except Exception as e:
+        logger.error("validate: unexpected error during validation (%s)", type(e).__name__)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal error during validation. Try again."},
+        )
 
     meta_kwargs["validation_calls"] = run.calls
     meta_kwargs["validation_input_tokens"] = run.input_tokens
@@ -481,10 +524,17 @@ def validate_design(
     design without re-running extraction/decide/design. Reuses the exact
     same validation loop as /design's "validate" stage.
     """
-    run = run_validation_loop(
-        request.requirements, request.decisions, request.design_markdown,
-        request.max_revisions, llm, decision_provider,
-    )
+    try:
+        run = run_validation_loop(
+            request.requirements, request.decisions, request.design_markdown,
+            request.max_revisions, llm, decision_provider,
+        )
+    except Exception as e:
+        logger.error("validate: unexpected error during validation (%s)", type(e).__name__)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal error during validation. Try again."},
+        )
 
     meta = DecisionMeta(
         # No decide-step call happened here, so these three are N/A.

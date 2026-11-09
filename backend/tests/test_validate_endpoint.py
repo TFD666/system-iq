@@ -199,6 +199,25 @@ def test_rate_limit_during_validation_returns_skipped_not_an_error():
     assert body["design_markdown"]  # markdown still comes back, unmodified
 
 
+class CrashingDecisionProvider(DecisionProvider):
+    """Raises an unexpected error -- proves /validate converts ANY
+    exception, not just the known Decision*Error types, into a clean 500."""
+    def decide(self, state, questions) -> DecisionResultSet:
+        raise RuntimeError("super secret design text that must never leak into a log or response")
+
+
+def test_unexpected_error_during_validation_becomes_clean_500(caplog):
+    client = _make_client(_NullLLM(), CrashingDecisionProvider())
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/validate", json=_request_body())
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal error during validation. Try again."
+    for record in caplog.records:
+        assert "super secret design text" not in record.getMessage()
+    assert any("RuntimeError" in record.getMessage() for record in caplog.records)
+
+
 def test_no_design_text_in_logs(caplog):
     provider = CountingDecisionProvider()
     client = _make_client(EchoLLM(), provider)

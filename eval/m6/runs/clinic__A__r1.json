@@ -1,0 +1,105 @@
+{
+  "stage": "designed",
+  "requirements": {
+    "project_summary": "Web application for a small clinic to manage patient appointments, send reminders, and doctor schedules.",
+    "app_type": "web",
+    "core_features": [
+      "Online appointment booking",
+      "Email and SMS appointment reminders",
+      "Daily schedule management for doctors"
+    ],
+    "user_roles": [
+      "Patient",
+      "Doctor"
+    ],
+    "expected_scale": {
+      "users": "300 patients and 5 doctors",
+      "peak_requests_per_second": null,
+      "data_volume": null
+    },
+    "realtime": null,
+    "geospatial": null,
+    "authentication": null,
+    "search_filtering": null,
+    "media_storage": null,
+    "payments": null,
+    "offline_support": null,
+    "external_integrations": [
+      "Email provider",
+      "SMS provider"
+    ],
+    "constraints": [],
+    "assumptions": [
+      "Authentication required to secure patient and doctor accounts"
+    ],
+    "unknowns": [
+      "realtime not specified",
+      "geospatial not specified",
+      "authentication not specified",
+      "search_filtering not specified",
+      "media_storage not specified",
+      "payments not specified",
+      "offline_support not specified",
+      "Deadline for launch"
+    ],
+    "evidence": {
+      "app_type": "A web app"
+    }
+  },
+  "decisions": null,
+  "meta": {
+    "decision_model": "none (llm-only baseline)",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "decision_billing": null,
+    "decision_cost": null,
+    "llm_model": "qwen/qwen3.8-27b",
+    "design_prompt_tokens": 4269,
+    "design_completion_tokens": 1502,
+    "design_group_stats": [
+      {
+        "id": "g1",
+        "prompt_tokens": 826,
+        "completion_tokens": 286,
+        "retries": 0,
+        "elapsed_seconds": 0.953,
+        "retry_reasons": []
+      },
+      {
+        "id": "g2",
+        "prompt_tokens": 797,
+        "completion_tokens": 225,
+        "retries": 0,
+        "elapsed_seconds": 61.032,
+        "retry_reasons": []
+      },
+      {
+        "id": "g3",
+        "prompt_tokens": 1820,
+        "completion_tokens": 662,
+        "retries": 1,
+        "elapsed_seconds": 122.14,
+        "retry_reasons": [
+          "too_short"
+        ]
+      },
+      {
+        "id": "g4",
+        "prompt_tokens": 826,
+        "completion_tokens": 329,
+        "retries": 0,
+        "elapsed_seconds": 60.922,
+        "retry_reasons": []
+      }
+    ],
+    "validation_calls": null,
+    "validation_input_tokens": null,
+    "validation_output_tokens": null,
+    "validation_status": null,
+    "validation_model": null
+  },
+  "design_markdown": "## 1. Architecture overview\nNo specific decisions were provided, so a modular monolith architecture is chosen by the model. This style fits the small scale of 300 patients and 5 doctors, avoiding unnecessary complexity. The main building blocks include user authentication, appointment management, scheduling logic, and notification services. All components reside in a single deployable unit to simplify development and maintenance for a small team.\n\n## 2. Components and responsibilities\n*   **Authentication Service:** Manages secure login and role-based access for patients and doctors.\n*   **Appointment Manager:** Handles creation, modification, and cancellation of online booking requests.\n*   **Schedule Engine:** Manages daily availability and prevents conflicts for doctor schedules.\n*   **Notification Orchestrator:** Triggers and sends email and SMS reminders to relevant parties.\n*   **External Gateway:** Integrates with third-party email and SMS providers for message delivery.\n*   **Data Store:** Persists user profiles, appointment details, and schedule configurations.\n\n## 3. Data flow\nWhen a patient requests a booking, the frontend submits data to the Appointment Manager. The Schedule Engine validates availability against the doctor's calendar stored in the database. Upon successful validation, the record is persisted. The Notification Orchestrator then queues messages. The External Gateway calls the third-party email and SMS providers to deliver reminders to both patients and doctors.\n\n## 4. API architecture\nThe API style is REST, **chosen by the model**, as it suits a simple web application with two user roles and basic CRUD operations for scheduling. The backend exposes endpoints for managing appointments, daily doctor schedules, and user authentication sessions. It also includes operations to trigger notification deliveries via external email and SMS providers. Since the scale is small (300 patients, 5 doctors), no complex versioning or advanced error handling strategies are required beyond standard HTTP status codes. This approach ensures easy integration with the frontend web interface.\n\n## 5. Database architecture and data model\nThe chosen database is PostgreSQL, **chosen by the model**, storing entities for Patients, Doctors, Appointments, and Roles. Each appointment record links a specific Patient to a Doctor and contains timestamp details for the scheduled time. Doctors maintain associations with multiple appointments representing their daily availability and confirmed bookings. No specific indexing or partitioning strategies are necessary given the expected user count of 300 patients and 5 doctors. The relational structure supports straightforward querying for schedule conflicts and reminder generation without requiring distributed data techniques.\n\n## 6. Authentication\nBecause no specific decision was made, a standard credential-based login is chosen by the model to secure accounts. Patients and doctors will authenticate via unique email addresses and passwords. Sessions are maintained using secure, http-only cookies with a reasonable lifetime to keep users logged in across devices. This approach ensures that only authorized individuals can book appointments or manage schedules, satisfying the assumption that authentication is required to protect sensitive health-related data effectively.\n\n## 7. Caching\nCache usage is not needed for this project. The system handles a small user base of 300 patients and 5 doctors, so database load remains low even during peak usage periods. Query responses for appointments and schedules are fast enough without an intermediary layer. Adding a caching mechanism, such as Redis or an in-memory store, would introduce unnecessary complexity without providing tangible performance benefits for this scale. Therefore, all data requests go directly to the primary database to keep the architecture simple and reliable for maintenance.\n\n## 8. External services\nThe system relies on two external integrations to support its core features. A transactional email service is used to send appointment confirmations, cancellations, and other administrative notifications directly to patients and doctors. An SMS gateway provider is integrated to deliver time-sensitive reminder messages via text message, ensuring patients receive timely alerts even if they do not check their email regularly. These services handle the actual delivery mechanisms, allowing the application to focus on scheduling logic and user management without managing telecom infrastructure.\n\n## 9. Security considerations\nTo protect the system, we address three main risks. First, input validation is implemented on all forms to prevent injection attacks, ensuring that appointment data and user inputs are sanitized before reaching the database. Second, secrets handling stores API keys for email and SMS providers in environment variables rather than source code, preventing accidental exposure through version control. Third, access control ensures strict role separation, so patients can only view their own bookings while doctors see their daily schedules, preventing unauthorized data exposure between users.\n\n## 10. Scaling\nThe system is designed for a small, fixed user base of three hundreds patients and five doctors. Given this limited scale, horizontal scaling is not needed. Traffic growth is unlikely to outpace standard single-server capacity. The architecture prioritizes simplicity over complex load-balancing infrastructure. Resources can be scaled vertically by increasing CPU or memory if usage increases, which is sufficient for this expected volume. No specific requirements for high-availability zones or distributed databases are indicated by the current data.\n\n## 11. Failure handling\nIf the email or SMS provider fails, reminders may be delayed. Since no retry policies are specified, the system might require manual intervention or a simple queue to handle transient failures. Authentication is required to secure accounts, though specific implementation details remain unspecified. Without defined timeout or fallback mechanisms, component failures could disrupt booking or reminder delivery. The design does not currently include automated failover or redundant provider configurations, leaving these recovery strategies open for future planning.\n\n## 12. Trade-offs and rationale\n- **Simplicity over Complexity**: Chose a straightforward architecture for a small user base. Complex clustering was rejected as unnecessary for three hundred users.\n- **Manual Integration**: Selected direct integration with email and SMS providers. Built-in redundancy was not requested, keeping the setup simple.\n- **Undefined Auth**: Authentication is a strict requirement, but the method is unclear. This leaves a gap in security implementation that must be addressed before launch.\n- **Limited Feature Set**: Real-time updates, payments, and offline support are not specified. This scope restriction reduces development effort but limits functionality.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Geospatial\n- Authentication\n- Search filtering\n- Media storage\n- Payments\n- Offline support\n\n### Other open questions\n- Deadline for launch",
+  "design_warnings": [],
+  "validation": null,
+  "revisions": null
+}

@@ -126,7 +126,7 @@ def revise_sections(
             + "\nWrite ALL of these headings again, in full, in this exact order:\n"
             + "\n".join(chunk_headings)
         )
-        system_prompt = _build_system_prompt(pseudo_group, requirements.app_type)
+        system_prompt = _build_system_prompt(pseudo_group, requirements.app_type, decisions_present)
 
         def _call(message: str) -> str:
             estimated_total = (len(system_prompt) + len(message)) // 4 + max_tokens
@@ -138,12 +138,12 @@ def revise_sections(
         # Numbers/ids only in the log -- never prompt text or model output.
         logger.info("validation: revising section(s) %s", chunk_numbers)
         text = _call(user_message)
-        bad = _validate_group(pseudo_group, text, decisions_present)
+        bad = _validate_group(pseudo_group, text)
 
         if bad:
             retry_message = _build_retry_user_message(user_message, pseudo_group, bad)
             text = _call(retry_message)
-            bad = _validate_group(pseudo_group, text, decisions_present)
+            bad = _validate_group(pseudo_group, text)
 
         text = _replace_leftover_identifiers(text)
         new_bodies = split_into_sections(text, chunk_headings)

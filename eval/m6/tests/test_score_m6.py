@@ -76,12 +76,63 @@ def test_tech_choices_picks_most_mentioned_term_per_category():
     assert result["tech_choices"]["architecture"] == "microservices"
 
 
-def test_tech_choices_is_none_on_a_tie_or_no_mention():
+def test_tech_choices_is_mixed_on_a_tie_and_none_on_no_mention():
+    # Was "none" on a tie -- the new spec gives "mixed" for a real tie and
+    # reserves "none" for zero mentions only.
     markdown = _headings_markdown({4: "REST GraphQL"})  # 1 mention each -- a tie
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
     result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
-    assert result["tech_choices"]["api_style"] == "none"
+    assert result["tech_choices"]["api_style"] == "mixed"
     assert result["tech_choices"]["database"] == "none"  # never mentioned
+
+
+def test_restful_and_rest_api_both_count_as_rest():
+    markdown = _headings_markdown({4: "Uses a RESTful style with a REST API and REST-based endpoints."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_choices"]["api_style"] == "REST"
+    assert result["tech_counts"]["api_style"]["REST"] == 3
+
+
+def test_modular_monolith_is_not_also_counted_as_plain_monolith():
+    markdown = _headings_markdown({1: "A modular monolith architecture, not a plain monolith elsewhere."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_counts"]["architecture"]["modular monolith"] == 1
+    assert result["tech_counts"]["architecture"]["monolith"] == 1  # only the standalone mention
+    assert result["tech_choices"]["architecture"] == "mixed"  # 1 vs 1 -- a real tie
+
+
+def test_database_synonyms_postgres_and_postgis_count_toward_postgresql():
+    markdown = _headings_markdown({5: "Postgres with PostGIS for geospatial queries."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_choices"]["database"] == "PostgreSQL"
+    assert result["tech_counts"]["database"]["PostgreSQL"] == 2
+
+
+def test_redis_is_never_counted_as_a_database():
+    markdown = _headings_markdown({7: "Redis caches hot reads."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_choices"]["database"] == "none"
+    assert "Redis" not in result["tech_counts"]["database"]
+
+
+def test_numeric_claims_counts_digit_and_written_numbers_with_units():
+    markdown = _headings_markdown({1: "We expect 500 users and about ten thousand requests per day."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "no numbers here")
+    assert result["numeric_claims"] == 2
+    assert result["unsupported_numbers"] == 2  # neither 500 nor "ten thousand" appears in the idea
+
+
+def test_numeric_claims_vs_unsupported_numbers_mixed_support():
+    markdown = _headings_markdown({1: "We expect 1000 users and 500 sellers on the platform."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "a platform for 1000 users")
+    assert result["numeric_claims"] == 2       # both "1000 users" and "500 sellers" are claims
+    assert result["unsupported_numbers"] == 1  # only 500 sellers is unbacked
 
 
 def test_unsupported_numbers_counts_unbacked_numeric_claims():
