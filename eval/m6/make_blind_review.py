@@ -52,7 +52,7 @@ def build_review_assignments(ideas: list[str], seed: int) -> dict[str, str]:
 
 def _rating_form() -> str:
     lines = ["## Rating (1-5, 5 = best)", ""]
-    for field in RATING_FIELDS:
+    for field in dict.fromkeys(RATING_FIELDS):  # each field printed once, even if listed twice
         lines.append(f"- {field}: ")
     return "\n".join(lines)
 
@@ -125,7 +125,7 @@ def _append_averages_to_report(averages: dict, report_path: Path = REPORT_PATH) 
     lines = ["", "## Blind review ratings (revealed)", ""]
     lines.append("| field | A | B |")
     lines.append("|---|---|---|")
-    for field in RATING_FIELDS:
+    for field in dict.fromkeys(RATING_FIELDS):  # each field printed once, even if listed twice
         a_val = averages["A"][field]
         b_val = averages["B"][field]
         a_str = f"{a_val:.2f}" if isinstance(a_val, float) else str(a_val)

@@ -161,3 +161,13 @@ n/a
 - Both versions use free-tier models behind one LLM and one decision provider.
 - This says how these two modes behaved on these specific ideas, not a general claim about llm-only vs pipeline design quality.
 - Validation wording changed during the evaluation; revalidated results use the neutral wording.
+
+## Blind review ratings (revealed)
+
+| field | A | B |
+|---|---|---|
+| specific | 4.17 | 3.00 |
+| correct | 3.17 | 3.17 |
+| useful | 4.00 | 2.83 |
+| clear | 4.17 | 3.83 |
+| n | 6 | 6 |
