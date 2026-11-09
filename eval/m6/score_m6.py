@@ -63,13 +63,34 @@ _WORD_UNITS = (
     "users", "requests", "rps", "seconds", "percent",
     "sellers", "patients", "members", "sensors", "doctors", "devices", "rows", "items",
 )
-_NUMBER_RE = re.compile(r"\d[\d,]*\.?\d*")
-_NUMBER_WORDS = (
-    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
-    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
-    "hundred", "thousand", "million", "billion",
+# Words that make a following number NOT a quantity claim (a count of
+# document structure, not of real-world things).
+_IGNORED_FOLLOWING_WORDS = (
+    "entities", "entity", "steps", "step", "sections", "section", "tables", "table",
+    "fields", "field", "endpoints", "endpoint", "components", "component", "modules", "module",
+    "layers", "layer",
 )
+# A number right after one of these is a version/crypto/protocol label,
+# not a quantity (SHA-256, TLS 1.2, HTTP/2, v2, RS256, ...).
+_IGNORED_PRECEDING_WORDS = (
+    "sha", "hmac", "tls", "http", "oauth", "rs", "es", "aes", "v", "version",
+)
+_IGNORED_PRECEDING_RE = re.compile(r"([A-Za-z]+)[/\-]?\s*$")
+
+_NUMBER_RE = re.compile(
+    r"\d[\d,]*\.?\d*[kK]?(?:\s+(?:hundred|thousand|million|billion))?", re.IGNORECASE,
+)
+_ONES = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_SCALES = {"hundred": 100, "thousand": 1000, "million": 1_000_000, "billion": 1_000_000_000}
+_NUMBER_WORDS = tuple(_ONES) + tuple(_TENS) + tuple(_SCALES)
 _WRITTEN_NUMBER_RE = re.compile(
     r"\b(?:" + "|".join(_NUMBER_WORDS) + r")(?:[\s-](?:" + "|".join(_NUMBER_WORDS) + r"))*\b",
     re.IGNORECASE,
@@ -122,20 +143,78 @@ def _section_numbers_text(markdown: str, numbers: tuple[int, ...]) -> str:
     return "\n".join(bodies.get(headings[n - 1]) or "" for n in numbers)
 
 
-def _find_unit_nearby(tail: str) -> str | None:
-    """Returns the specific unit word/symbol found near a number, or None."""
-    if tail.startswith("%"):
-        return "%"
-    attached = re.match(r"[a-zA-Z]+", tail.lower())
-    if attached and attached.group(0) in _ATTACHED_UNITS:
-        return attached.group(0)
-    following = " ".join(tail.split()[:3]).lower()
-    if "per second" in following:
-        return "per second"
-    for unit in _WORD_UNITS:
-        if unit in following:
-            return unit
-    return None
+def _digits_to_int(token: str) -> int | None:
+    """"500" -> 500, "10,000" -> 10000, "10k" -> 10000, "10 million" -> 10000000."""
+    token = token.strip()
+    scale = 1
+    lowered = token.lower()
+    for word, mult in _SCALES.items():
+        if lowered.endswith(word):
+            scale = mult
+            token = token[: -len(word)].strip()
+            break
+    multiplier = 1
+    if token[-1:].lower() == "k":
+        multiplier = 1000
+        token = token[:-1]
+    cleaned = token.replace(",", "")
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    return int(value * multiplier * scale)
+
+
+def _words_to_int(phrase: str) -> int | None:
+    """"ten thousand" -> 10000, "fifty" -> 50. None if not a pure number phrase."""
+    total = 0
+    current = 0
+    found = False
+    for word in re.split(r"[\s-]+", phrase.lower()):
+        if word in _ONES:
+            current += _ONES[word]
+            found = True
+        elif word in _TENS:
+            current += _TENS[word]
+            found = True
+        elif word == "hundred":
+            current = (current or 1) * 100
+            found = True
+        elif word in ("thousand", "million", "billion"):
+            total += (current or 1) * _SCALES[word]
+            current = 0
+            found = True
+        else:
+            return None
+    return total + current if found else None
+
+
+def _is_ignored_by_preceding_word(text: str, start: int) -> bool:
+    """True when the number is really a version/crypto/protocol label, e.g.
+    SHA-256, TLS 1.2, HTTP/2, v2, RS256 -- not a quantity."""
+    m = _IGNORED_PRECEDING_RE.search(text[:start])
+    return bool(m and m.group(1).lower() in _IGNORED_PRECEDING_WORDS)
+
+
+def _clean_word(word: str) -> str:
+    return word.strip(".,;:()").lower()
+
+
+def _classify_following(words_after: list[str]) -> tuple[str | None, bool]:
+    """
+    Scans the next word, then (if that one wasn't decisive) one more --
+    "allow one adjective between" -- for either a unit word (returned) or
+    a word that means this number isn't a quantity at all (ignored=True).
+    """
+    for i in range(min(2, len(words_after))):
+        word = _clean_word(words_after[i])
+        if word in _IGNORED_FOLLOWING_WORDS:
+            return None, True
+        if word in _WORD_UNITS:
+            return word, False
+        if word == "per" and i + 1 < len(words_after) and _clean_word(words_after[i + 1]) == "second":
+            return "per second", False
+    return None, False
 
 
 def _context_snippet(text: str, start: int, end: int, n: int = 4) -> str:
@@ -147,32 +226,69 @@ def _context_snippet(text: str, start: int, end: int, n: int = 4) -> str:
 
 def _numeric_claims(text: str) -> list[dict]:
     """
-    Every number (digits or spelled out, e.g. "ten thousand") followed
-    within ~3 words by a unit word -- a numeric claim, not yet checked
-    against the idea/requirements for support. Each claim carries its
-    matched unit and a snippet of surrounding design text (no idea text).
+    Every number (digits, "10k", or spelled out like "ten thousand")
+    whose very next word (one adjective may sit in between, e.g. "50
+    active users") is a unit word -- a numeric claim, not yet checked for
+    support. Ignores version/protocol numbers (SHA-256, HTTP/2, v2, ...)
+    and counts of document structure (steps, sections, entities, ...).
+    Each claim carries its canonical integer value, matched unit, and a
+    snippet of surrounding design text (no idea text).
     """
     claims = []
-    for pattern in (_NUMBER_RE, _WRITTEN_NUMBER_RE):
+    digit_spans: list[tuple[int, int]] = []
+    for pattern, to_int in ((_NUMBER_RE, _digits_to_int), (_WRITTEN_NUMBER_RE, _words_to_int)):
         for m in pattern.finditer(text):
-            unit = _find_unit_nearby(text[m.end():m.end() + 20])
-            if unit is not None:
-                claims.append({
-                    "number": m.group(0),
-                    "unit": unit,
-                    "context": _context_snippet(text, m.start(), m.end()),
-                })
+            if pattern is _WRITTEN_NUMBER_RE and any(s <= m.start() < e for s, e in digit_spans):
+                continue  # already captured as part of a digit+scale-word match, e.g. "10 million"
+            if _is_ignored_by_preceding_word(text, m.start()):
+                continue
+            value = to_int(m.group(0))
+            if value is None:
+                continue
+            if pattern is _NUMBER_RE:
+                digit_spans.append((m.start(), m.end()))
+
+            tail = text[m.end():m.end() + 2]
+            if tail.startswith("%"):
+                unit, end = "%", m.end() + 1
+            else:
+                attached = re.match(r"[a-zA-Z]+", text[m.end():m.end() + 4].lower())
+                if attached and attached.group(0) in _ATTACHED_UNITS:
+                    unit, end = attached.group(0), m.end() + len(attached.group(0))
+                else:
+                    words_after = text[m.end():m.end() + 60].split()
+                    unit, ignored = _classify_following(words_after)
+                    if ignored:
+                        continue
+                    end = m.end()
+
+            if unit is None:
+                continue
+
+            claims.append({
+                "number": m.group(0),
+                "value": value,
+                "unit": unit,
+                "context": _context_snippet(text, m.start(), end),
+            })
     return claims
 
 
-def _number_is_supported(number: str, idea_text: str, requirements: dict) -> bool:
-    normalized = number.replace(",", "")
+def _number_is_supported(value: int, idea_text: str, requirements: dict) -> bool:
     haystacks = [idea_text]
     scale = (requirements or {}).get("expected_scale") or {}
     haystacks.extend(str(v) for v in scale.values() if v is not None)
     for haystack in haystacks:
-        cleaned = haystack.replace(",", "")
-        if number in haystack or normalized in cleaned:
+        found = set()
+        for m in _NUMBER_RE.finditer(haystack):
+            v = _digits_to_int(m.group(0))
+            if v is not None:
+                found.add(v)
+        for m in _WRITTEN_NUMBER_RE.finditer(haystack):
+            v = _words_to_int(m.group(0))
+            if v is not None:
+                found.add(v)
+        if value in found:
             return True
     return False
 
@@ -290,7 +406,7 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
     requirements = body.get("requirements") or {}
     unsupported_listing = [
         {"number": c["number"], "unit": c["unit"], "context": c["context"]}
-        for c in claims if not _number_is_supported(c["number"], idea_text, requirements)
+        for c in claims if not _number_is_supported(c["value"], idea_text, requirements)
     ]
     unsupported_numbers = len(unsupported_listing)
 

@@ -167,6 +167,52 @@ def test_numeric_claims_counts_digit_and_written_numbers_with_units():
     assert result["unsupported_numbers"] == 2  # neither 500 nor "ten thousand" appears in the idea
 
 
+def test_fifty_sensors_supported_by_idea_with_50_sensors():
+    markdown = _headings_markdown({1: "The system monitors fifty sensors across the building."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "a building with 50 sensors")
+    assert result["numeric_claims"] == 1
+    assert result["unsupported_numbers"] == 0
+
+
+def test_hmac_sha_256_is_ignored():
+    markdown = _headings_markdown({6: "Signatures use HMAC-SHA 256 for integrity."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "no numbers here")
+    assert result["numeric_claims"] == 0
+
+
+def test_three_entities_users_is_ignored():
+    markdown = _headings_markdown({5: "There are three entities: Users, Orders, and Products."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "no numbers here")
+    assert result["numeric_claims"] == 0
+
+
+def test_10_million_users_is_unsupported():
+    markdown = _headings_markdown({1: "The platform is designed for 10 million users worldwide."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "no numbers here")
+    assert result["numeric_claims"] == 1
+    assert result["unsupported_numbers"] == 1
+
+
+def test_ten_thousand_users_supported_by_idea_with_10_000_users():
+    markdown = _headings_markdown({1: "The system must support ten thousand users at launch."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "a service for 10,000 users")
+    assert result["numeric_claims"] == 1
+    assert result["unsupported_numbers"] == 0
+
+
+def test_adjective_between_number_and_unit_is_allowed():
+    markdown = _headings_markdown({1: "The system handles 50 active users per session."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "no numbers here")
+    assert result["numeric_claims"] == 1
+    assert result["unsupported_listing"][0]["unit"] == "users"
+
+
 def test_numeric_claims_vs_unsupported_numbers_mixed_support():
     markdown = _headings_markdown({1: "We expect 1000 users and 500 sellers on the platform."})
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
