@@ -30,6 +30,11 @@ RUNS_DIR = HERE / "runs"
 
 REQUEST_TIMEOUT = 900.0
 
+# HTTP statuses worth one retry (upstream LLM/Jev hiccup) -- never 429
+# (rate limit) or anything else.
+_TRANSIENT_RETRY_STATUS = (502, 503, 504)
+_TRANSIENT_RETRY_WAIT = 60.0
+
 
 def _read_text_bom(path: Path) -> str:
     return path.read_bytes().decode("utf-8-sig")
@@ -63,6 +68,20 @@ def _check_real_run(version: str, meta: dict) -> str | None:
     if meta.get("validation_status") == "skipped":
         return "validation_status is skipped"
     return None
+
+
+def _post_with_one_transient_retry(url: str, body: dict, run_id: str) -> httpx.Response:
+    """
+    One request; on a 502/503/504 it prints a notice, waits 60s, and sends
+    the SAME request once more. A 429 or any other status is returned
+    as-is (never retried here) for the caller's normal stop logic.
+    """
+    response = httpx.post(url, json=body, timeout=REQUEST_TIMEOUT)
+    if response.status_code in _TRANSIENT_RETRY_STATUS:
+        print(f"{run_id}: transient upstream error, retrying once")
+        time.sleep(_TRANSIENT_RETRY_WAIT)
+        response = httpx.post(url, json=body, timeout=REQUEST_TIMEOUT)
+    return response
 
 
 def _build_jobs(ideas_dir: Path, versions: list[str], repeats: int) -> list[dict]:
@@ -123,8 +142,8 @@ def main() -> None:
 
         start_time = time.time()
         try:
-            response = httpx.post(
-                f"{args.api_url.rstrip('/')}/design", json=body, timeout=REQUEST_TIMEOUT,
+            response = _post_with_one_transient_retry(
+                f"{args.api_url.rstrip('/')}/design", body, run_id,
             )
         except httpx.HTTPError as exc:
             print(f"stop: {run_id}: request failed ({type(exc).__name__})")

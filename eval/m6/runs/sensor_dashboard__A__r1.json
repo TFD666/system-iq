@@ -1,20 +1,19 @@
 {
   "stage": "designed",
   "requirements": {
-    "project_summary": "A live monitoring dashboard for warehouse environmental sensors that visualizes data and triggers alerts based on thresholds.",
+    "project_summary": "A live monitoring dashboard displaying temperature and humidity from warehouse sensors with out-of-range alerts.",
     "app_type": null,
     "core_features": [
-      "Real-time visualization of temperature and humidity",
-      "Threshold-based alerting system",
-      "Ingestion of data from 50 sensors"
+      "Live dashboard for temperature and humidity readings",
+      "Alerts when readings go out of range"
     ],
     "user_roles": [
-      "Staff"
+      "staff"
     ],
     "expected_scale": {
       "users": null,
       "peak_requests_per_second": null,
-      "data_volume": "50 sensors"
+      "data_volume": "about 50 sensors"
     },
     "realtime": true,
     "geospatial": null,
@@ -24,12 +23,11 @@
     "payments": null,
     "offline_support": null,
     "external_integrations": [
-      "sensor network"
+      "sensor infrastructure"
     ],
     "constraints": [],
     "assumptions": [
-      "Staff have web browser access",
-      "Data is stored for historical tracking"
+      "Input source is web-based due to dashboard interface"
     ],
     "unknowns": [
       "app_type not specified",
@@ -39,10 +37,11 @@
       "media_storage not specified",
       "payments not specified",
       "offline_support not specified",
-      "Alert delivery method (e.g. SMS, email, app push)"
+      "threshold configuration method",
+      "alert delivery mechanism"
     ],
     "evidence": {
-      "realtime": "shows live temperature and humidity readings"
+      "realtime": "shows live temperature"
     }
   },
   "decisions": null,
@@ -53,39 +52,39 @@
     "decision_billing": null,
     "decision_cost": null,
     "llm_model": "qwen/qwen3.8-27b",
-    "design_prompt_tokens": 3542,
-    "design_completion_tokens": 1113,
+    "design_prompt_tokens": 2946,
+    "design_completion_tokens": 1182,
     "design_group_stats": [
       {
         "id": "g1",
-        "prompt_tokens": 883,
-        "completion_tokens": 337,
+        "prompt_tokens": 734,
+        "completion_tokens": 330,
         "retries": 0,
-        "elapsed_seconds": 1.125,
+        "elapsed_seconds": 1.328,
         "retry_reasons": []
       },
       {
         "id": "g2",
-        "prompt_tokens": 854,
-        "completion_tokens": 264,
+        "prompt_tokens": 705,
+        "completion_tokens": 249,
         "retries": 0,
-        "elapsed_seconds": 61.75,
+        "elapsed_seconds": 60.828,
         "retry_reasons": []
       },
       {
         "id": "g3",
-        "prompt_tokens": 922,
-        "completion_tokens": 261,
+        "prompt_tokens": 773,
+        "completion_tokens": 320,
         "retries": 0,
-        "elapsed_seconds": 60.75,
+        "elapsed_seconds": 61.235,
         "retry_reasons": []
       },
       {
         "id": "g4",
-        "prompt_tokens": 883,
-        "completion_tokens": 251,
+        "prompt_tokens": 734,
+        "completion_tokens": 283,
         "retries": 0,
-        "elapsed_seconds": 61.25,
+        "elapsed_seconds": 60.89,
         "retry_reasons": []
       }
     ],
@@ -95,7 +94,7 @@
     "validation_status": null,
     "validation_model": null
   },
-  "design_markdown": "## 1. Architecture overview\nThe project utilizes a modular monolith architecture. Since the platform is unspecified, the system is designed as a client application with a tiered structure. The real-time nature of the data and the specific volume of 50 sensors make a scalable backend suitable. This approach simplifies deployment for a staff-only audience. The main building blocks include an ingestion service for sensor data, a processing engine for alerts, and a presentation layer. No microservices are proposed because the scale does not currently demand that complexity. The design remains flexible for future growth.\n\n## 2. Components and responsibilities\n- Sensor Ingestion Service: Connects to the external sensor network. It collects raw temperature and humidity data from all fifty units.\n- Data Processing Engine: Evaluates incoming values against defined thresholds. It triggers alerts when conditions exceed limits.\n- Storage Component: Persists historical data for tracking purposes. It maintains records of all sensor readings.\n- Visualization Layer: Renders real-time temperature and humidity views. It supports staff access via web browsers.\n- Alert Delivery Module: Manages the dispatch of notifications. The specific delivery method is not yet decided.\n\n## 3. Data flow\nData travels from the sensor network into the ingestion service. The processing engine then analyzes each reading for threshold breaches. Compliant data is written to the storage component. Alert signals are routed to the delivery module. The visualization layer reads the latest data from storage or direct sockets. Staff view the updated metrics in their client application. Historical queries access the persisted records. The system ensures continuous data flow. No intermediate caching is explicitly required. The path remains simple and direct.\n\n## 4. API architecture\n**REST API** is the selected style, chosen by the model. A standard REST approach fits because the integration with the sensor network requires simple, predictable data retrieval.\n*   `POST /sensors/ingest`: Receive real-time temperature and humidity readings.\n*   `GET /sensors/readings`: Fetch current and historical sensor values.\n*   `GET /alerts/status`: Check the status of the threshold-based alerting system.\nSince no specific versioning requirements or complex error scenarios were specified in the data, standard HTTP status codes suffice for basic error handling. This remains a sensible choice given the unspecified nature of the client application platform.\n\n## 5. Database architecture and data model\n**PostgreSQL** is the chosen database, selected by the model. It provides reliable relational integrity for structured sensor data.\n*   `sensors`: Stores sensor unique identifiers and location details.\n*   `readings`: Captures timestamped temperature and humidity values.\n*   `alerts`: Logs triggered events when thresholds are exceeded.\nThe relationship is one-to-many: a single sensor record associates with multiple reading entries. Given the data volume of only 50 sensors, no special indexing or partitioning is currently needed for this specific scale.\n\n## 6. Authentication\nAuthentication details are not yet decided. Since the application assumes staff access via a web browser, some form of user identification is required to control access to the sensor dashboard. The specific method and session parameters remain unclear until further specification is provided for the client application environment.\n\n## 7. Caching\nCaching is not needed. No specific decision regarding cache implementation or data storage layers was made in the provided data. The system focuses on real-time visualization and threshold alerts, but the technical approach for handling data persistence or retrieval speed remains unspecified.\n\n## 8. External services\nThe project depends on a sensor network. This service is used to ingest raw temperature and humidity data from fifty physical devices feeding into the platform. No other external integrations or third-party services are listed in the current requirements or decisions.\n\n## 9. Security considerations\n*   **Access Control**: Roles are limited to staff, but specific permission boundaries remain unclear.\n*   **Input Validation**: Data ingestion from sensors requires validation to handle malformed or corrupted reports.\n*   **Secrets Handling**: Storage mechanisms for API keys or credentials are not yet decided.\n*   **Transport Security**: Standard encryption for data in transit is assumed but not explicitly detailed in the provided data set.\n\n## 10. Scaling\nWith fifty sensors and unspecified user counts or traffic, the platform is not specified. Since no horizontal scaling requirement is defined, the system assumes vertical scaling suffices. The architecture supports adding a load balancer later if user volume increases significantly. For now, a single-instance deployment for the application layer and database is adequate and chosen by the model.\n\n## 11. Failure handling\nIf the sensor network fails, the system continues serving historical data. Real-time updates pause until connectivity restores. Retries for sensor ingestion use a short polling interval or push-based backoff, chosen by the model. The alerting component includes timeouts to prevent blocking. No separate fallback logic is described; system behavior reverts to last-known state during temporary outages.\n\n## 12. Trade-offs and rationale\n-   Real-time updates prioritize latency over strict ordering; chosen by the model.\n-   No dedicated authentication or offline support is implemented, keeping the scope minimal.\n-   Data storage focuses on historical tracking, not complex analytics chosen by the model.\n-   Alert delivery methods are unspecified, so no integration costs are incurred.\n-   Simplicity is preferred over distributed complexity given the fixed sensor count.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Geospatial\n- Authentication\n- Search filtering\n- Media storage\n- Payments\n- Offline support\n- App type\n\n### Other open questions\n- Alert delivery method (e.g. SMS, email, app push)",
+  "design_markdown": "## 1. Architecture overview\nA modular monolith architecture is optimal for this small-scope project serving approximately 50 sensors. This style minimizes operational overhead while maintaining clear internal boundaries for real-time processing. The system relies on three primary building blocks: a data ingestion layer, a state management core, and a presentation module. This structure supports immediate responsiveness for live dashboard updates without the complexity of distributed microservices.\n\n## 2. Components and responsibilities\n*   **Ingestion Service**: Connects to the external sensor infrastructure, normalizes incoming temperature and humidity samples, and pushes them into the event stream.\n*   **Realtime Engine**: Consumes the data stream, maintains current sensor states in memory, and evaluates them against defined operational ranges.\n*   **Alert Handler**: Triggers alert generation whenever sensor values breach configured thresholds, preparing notifications for delivery.\n*   **Dashboard Interface**: Renders live metric views for staff users, consuming the current state snapshot via WebSocket or Server-Sent Events.\n*   **Persistence Store**: Archives historical sensor readings for trend analysis and system auditing, decoupled from the live processing path.\n\n## 3. Data flow\nSensor signals arrive from the external infrastructure and are immediately captured by the Ingestion Service. These raw readings enter the Realtime Engine, which updates the in-memory state map and checks for threshold violations. Simultaneously, updated states are streamed to the Dashboard Interface, ensuring staff see current values without latency. The Persistent Store receives queued data to log historical records. If a reading exceeds limits, the Alert Handler intercepts the event and dispatches a notification.\n\n## 4. API architecture\nA REST API is the most suitable style for this project. It fits well with a client application that polls for current sensor readings and subscribes to alert notifications. The API exposes a `/readings` endpoint for the latest temperature and humidity values and an `/alerts` endpoint for threshold violations. Because the system serves about 50 sensors, the workload is modest, so the API can use standard JSON payloads and simple HTTP status codes for error handling. No versioning strategy is necessary at this scale, but including a `v1` prefix leaves room for future changes without breaking the client application.\n\n## 5. Database architecture and data model\nPostgreSQL is a fitting database for this project. It reliably stores the main entities: sensors, readings, alerts, and user accounts for staff. Each sensor has many readings kept over time, and each alert references the reading that triggered it. Staff users can manage threshold configuration and receive alerts. At the scale of about 50 sensors, the data volume is small, so no partitioning or advanced indexing is required beyond a primary key on readings and foreign keys linking sensors to readings and alerts. This relational structure is straightforward to query for the live dashboard.\n\n## 6. Authentication\nStaff members must verify their identity before accessing the dashboard or configuring alert thresholds. We use OAuth 2.0 with JSON Web Tokens to secure API access between the client application and the backend. Tokens will include a standard expiration time to ensure that compromised credentials do not grant indefinite access to environmental data. This approach applies to all authenticated staff users interacting with the live readings and alert settings.\n\n## 7. Caching\nCaching is not needed for this project. The dashboard relies on a real-time data feed from approximately fifty sensors, where freshness is critical. Storing recent readings in a cache layer would introduce unnecessary complexity and potential latency for users who require immediate visibility into temperature and humidity fluctuations. We will rely on the direct WebSocket connection to push the latest data to the client application without intermediate storage delays.\n\n## 8. External services\nThe system integrates with the existing sensor infrastructure to ingest temperature and humidity data continuously. This external hardware network provides the raw telemetry that drives the live dashboard displays. No other third-party cloud services or vendor-specific APIs are required for the core functionality of this project at this stage.\n\n## 9. Security considerations\n*   Input validation ensures all sensor data points fall within physically plausible ranges before storage.\n*   Secrets handling stores sensor credentials and API keys in a dedicated environment variable manager, never in source code.\n*   Access control restricts dashboard visibility and configuration options to authenticated staff roles only.\n*   Transport layer security encrypts all data in transit between sensors, backend, and client application to prevent interception.\n\n## 10. Scaling\nWith approximately 50 sensors, the system does not require complex horizontal scaling. The application server can handle initial loads on a single instance. If traffic grows, stateless API components can be replicated behind a load balancer. The database should be monitored for connection limits; read replicas can be added to offload dashboard queries from write operations. Since data volume is low, no sharding is currently necessary.\n\n## 11. Failure handling\nIf the sensor infrastructure becomes unavailable, the system continues displaying last known values while marking data as stale. API calls to external services include timeouts to prevent thread blocking. Clients automatically reconnect with exponential backoff if the WebSocket connection drops. Database operations rely on transactional integrity; failed writes are logged for manual review. Alerts may be delayed during outages but are queued to fire once connectivity is restored.\n\n## 12. Trade-offs and rationale\n*   **WebSockets over polling:** Lower server overhead and real-time updates for the dashboard, at the cost of slightly more complex client-side reconnection logic.\n*   **Monolithic start:** Simpler deployment for 50 sensors; microservices are deferred until actual latency or team scaling demands justify the infrastructure complexity.\n*   **Client-side caching:** Reduces database load for frequently viewed historical data, accepting that stale data may appear briefly during temporary network interruptions.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Geospatial\n- Authentication\n- Search filtering\n- Media storage\n- Payments\n- Offline support\n- App type\n\n### Other open questions\n- threshold configuration method\n- alert delivery mechanism",
   "design_warnings": [],
   "validation": null,
   "revisions": null

@@ -16,9 +16,11 @@ from app.extraction import ExtractionError
 from app.llm import (
     GROQ_API_URL,
     MAX_RATE_LIMIT_RETRIES,
+    MAX_TRANSIENT_RETRIES,
     GroqAuthError,
     LLMProvider,
     LLMResult,
+    LLMUnavailableError,
     GroqProvider,
     RateLimitError,
 )
@@ -778,6 +780,89 @@ def test_429_never_logs_the_provider_message_text(groq_provider, caplog):
 
     for record in caplog.records:
         assert "org_abc123xyz" not in record.getMessage()
+
+
+# ── GroqProvider transient error retry tests (5xx / timeouts) ──────────────────
+
+def _make_status_response(status: int) -> MagicMock:
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status
+    resp.headers = {}
+    return resp
+
+
+@pytest.fixture
+def groq_provider_with_injected_sleep(monkeypatch):
+    """A GroqProvider whose transient-retry sleep is a plain mock, injected
+    through the constructor (not module-level time.sleep)."""
+    monkeypatch.setenv("GROQ_API_KEY", "fake-key-for-tests")
+    mock_sleep = MagicMock()
+    return GroqProvider(sleep=mock_sleep), mock_sleep
+
+
+def test_503_then_success_retries_and_succeeds(groq_provider_with_injected_sleep):
+    provider, mock_sleep = groq_provider_with_injected_sleep
+    responses = [_make_status_response(503), _make_200_response()]
+
+    with patch("app.llm.httpx.post", side_effect=responses) as mock_post:
+        result = provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    mock_sleep.assert_called_once_with(5.0)
+    assert mock_post.call_count == 2
+    assert result.prompt_tokens == 30
+
+
+def test_503_three_times_raises_llm_unavailable_error(groq_provider_with_injected_sleep):
+    provider, mock_sleep = groq_provider_with_injected_sleep
+    responses = [_make_status_response(503)] * (MAX_TRANSIENT_RETRIES + 1)
+
+    with patch("app.llm.httpx.post", side_effect=responses):
+        with pytest.raises(LLMUnavailableError):
+            provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    assert mock_sleep.call_args_list == [((5.0,),), ((15.0,),)]
+
+
+def test_design_endpoint_answers_503_when_llm_unavailable():
+    class _UnavailableProvider(LLMProvider):
+        def complete_json(self, system, user, max_tokens):
+            raise LLMUnavailableError("gone")
+
+    client = make_client(_UnavailableProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "extract"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "The language model service is temporarily unavailable. Try again in a few minutes."
+    )
+
+
+@pytest.mark.parametrize("exc_cls", [httpx.TimeoutException, httpx.ConnectError])
+def test_timeout_and_connection_error_count_as_transient(groq_provider_with_injected_sleep, exc_cls):
+    provider, mock_sleep = groq_provider_with_injected_sleep
+
+    with patch("app.llm.httpx.post", side_effect=[exc_cls("boom"), _make_200_response()]):
+        result = provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    mock_sleep.assert_called_once_with(5.0)
+    assert result.prompt_tokens == 30
+
+
+def test_transient_retry_logs_only_status_code_and_attempt_number(groq_provider_with_injected_sleep, caplog):
+    import logging
+    provider, _mock_sleep = groq_provider_with_injected_sleep
+    responses = [_make_status_response(502), _make_200_response()]
+
+    with patch("app.llm.httpx.post", side_effect=responses):
+        with caplog.at_level(logging.INFO):
+            provider.complete_json(system="sys", user="usr", max_tokens=100)
+
+    transient_records = [r for r in caplog.records if "502" in r.getMessage()]
+    assert transient_records
+    for record in transient_records:
+        message = record.getMessage()
+        assert "502" in message
+        assert "attempt 2/3" in message
 
 
 @pytest.mark.parametrize("status", [401, 403])

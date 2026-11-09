@@ -49,6 +49,13 @@ class GroqAuthError(Exception):
     """Raised when Groq rejects the API key (HTTP 401 or 403)."""
 
 
+class LLMUnavailableError(Exception):
+    """
+    Raised when Groq keeps failing with a transient error (HTTP 500, 502,
+    503, 504, a timeout, or a connection error) after retrying.
+    """
+
+
 # ── abstract base ──────────────────────────────────────────────────────────────
 
 class LLMProvider(ABC):
@@ -90,6 +97,12 @@ _FALLBACK_RETRY_SECONDS = 10.0
 # reporting which model was used, so the two never drift apart.
 DEFAULT_GROQ_MODEL = "qwen/qwen3-27b"
 
+# Transient failures (worth retrying): these HTTP statuses, plus any
+# httpx timeout or connection error.
+_TRANSIENT_STATUS_CODES = (500, 502, 503, 504)
+MAX_TRANSIENT_RETRIES = 2
+_TRANSIENT_WAIT_SCHEDULE = (5.0, 15.0)
+
 
 def _parse_retry_seconds(response: httpx.Response) -> float:
     """
@@ -121,7 +134,7 @@ def _parse_retry_seconds(response: httpx.Response) -> float:
 
 
 class GroqProvider(LLMProvider):
-    def __init__(self) -> None:
+    def __init__(self, sleep=time.sleep) -> None:
         # Read credentials from environment; fail loudly at startup if missing
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
@@ -133,6 +146,9 @@ class GroqProvider(LLMProvider):
         # The design writer can use a different (e.g. higher-limit) model;
         # extraction always uses GROQ_MODEL.
         self._design_model = os.getenv("GROQ_DESIGN_MODEL", self._model)
+        # Injectable so tests can verify the 5s/15s transient-retry wait
+        # schedule without actually sleeping.
+        self._sleep = sleep
 
     def complete_json(self, system: str, user: str, max_tokens: int) -> LLMResult:
         """
@@ -183,6 +199,53 @@ class GroqProvider(LLMProvider):
             completion_tokens=result.completion_tokens,
         )
 
+    def _post_with_transient_retry(self, payload: dict, headers: dict) -> httpx.Response:
+        """
+        One logical request: retries HTTP 500/502/503/504, timeouts, and
+        connection errors up to MAX_TRANSIENT_RETRIES times (5s then 15s),
+        then raises LLMUnavailableError. Any other response (200, 429,
+        401/403, ...) is returned as-is for the caller to handle.
+        """
+        for attempt in range(MAX_TRANSIENT_RETRIES + 1):
+            try:
+                response = httpx.post(
+                    GROQ_API_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=90.0,  # Groq reasoning calls can be slow
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt < MAX_TRANSIENT_RETRIES:
+                    wait = _TRANSIENT_WAIT_SCHEDULE[attempt]
+                    # Exception class only in the log -- never its text.
+                    logger.info(
+                        "Groq %s: waiting %.0fs before attempt %d/%d",
+                        type(exc).__name__, wait, attempt + 2, MAX_TRANSIENT_RETRIES + 1,
+                    )
+                    self._sleep(wait)
+                    continue
+                raise LLMUnavailableError(
+                    "Groq did not respond after retrying transient errors."
+                ) from exc
+
+            if response.status_code not in _TRANSIENT_STATUS_CODES:
+                return response
+
+            if attempt < MAX_TRANSIENT_RETRIES:
+                wait = _TRANSIENT_WAIT_SCHEDULE[attempt]
+                # Status code and attempt number only -- never the response body.
+                logger.info(
+                    "Groq %d: waiting %.0fs before attempt %d/%d",
+                    response.status_code, wait, attempt + 2, MAX_TRANSIENT_RETRIES + 1,
+                )
+                self._sleep(wait)
+                continue
+            raise LLMUnavailableError(
+                f"Groq returned HTTP {response.status_code} and retries are exhausted."
+            )
+
+        raise LLMUnavailableError("Groq did not respond after retrying transient errors.")
+
     def _post_chat_completion(self, payload: dict) -> LLMResult:
         """
         The retry/error-handling loop shared by complete_json and
@@ -194,17 +257,7 @@ class GroqProvider(LLMProvider):
         }
 
         for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
-            try:
-                response = httpx.post(
-                    GROQ_API_URL,
-                    json=payload,
-                    headers=headers,
-                    timeout=90.0,  # Groq reasoning calls can be slow
-                )
-            except httpx.TimeoutException:
-                raise  # Let the caller (main.py) translate this to HTTP 504
-            except httpx.NetworkError:
-                raise  # Same — let the caller handle it
+            response = self._post_with_transient_retry(payload, headers)
 
             if response.status_code == 429:
                 requested = _parse_retry_seconds(response)

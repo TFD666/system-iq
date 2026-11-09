@@ -1,15 +1,18 @@
 {
   "stage": "designed",
   "requirements": {
-    "project_summary": "A mobile application for a college club to facilitate event management, RSVPs, and member communication.",
+    "project_summary": "Mobile application for a college club to manage events, RSVPs, and member announcements.",
     "app_type": "mobile",
     "core_features": [
       "Post events",
-      "RSVP for events",
-      "Send announcements"
+      "View events",
+      "RSVP to events",
+      "Send announcements",
+      "Receive announcements"
     ],
     "user_roles": [
-      "Club members"
+      "Club member",
+      "Club organizer/admin"
     ],
     "expected_scale": {
       "users": "800",
@@ -26,8 +29,9 @@
     "external_integrations": [],
     "constraints": [],
     "assumptions": [
-      "Club administrators manage event posting",
-      "User identities are verified to access the app"
+      "Organizers have elevated permissions to post content",
+      "Authentication is required to restrict access to club members",
+      "Activity is concentrated during event weeks"
     ],
     "unknowns": [
       "realtime not specified",
@@ -36,8 +40,7 @@
       "search_filtering not specified",
       "media_storage not specified",
       "payments not specified",
-      "offline_support not specified",
-      "Notification delivery method preference"
+      "offline_support not specified"
     ],
     "evidence": {
       "app_type": "A mobile app for a college club"
@@ -51,39 +54,42 @@
     "decision_billing": null,
     "decision_cost": null,
     "llm_model": "qwen/qwen3.8-27b",
-    "design_prompt_tokens": 3238,
-    "design_completion_tokens": 1195,
+    "design_prompt_tokens": 3667,
+    "design_completion_tokens": 1483,
     "design_group_stats": [
       {
         "id": "g1",
-        "prompt_tokens": 807,
-        "completion_tokens": 284,
+        "prompt_tokens": 700,
+        "completion_tokens": 333,
         "retries": 0,
-        "elapsed_seconds": 1.156,
+        "elapsed_seconds": 1.641,
         "retry_reasons": []
       },
       {
         "id": "g2",
-        "prompt_tokens": 778,
-        "completion_tokens": 204,
+        "prompt_tokens": 671,
+        "completion_tokens": 268,
         "retries": 0,
-        "elapsed_seconds": 60.657,
+        "elapsed_seconds": 61.109,
         "retry_reasons": []
       },
       {
         "id": "g3",
-        "prompt_tokens": 846,
-        "completion_tokens": 369,
-        "retries": 0,
-        "elapsed_seconds": 61.421,
-        "retry_reasons": []
+        "prompt_tokens": 1596,
+        "completion_tokens": 570,
+        "retries": 1,
+        "elapsed_seconds": 122.125,
+        "retry_reasons": [
+          "too_short",
+          "too_short"
+        ]
       },
       {
         "id": "g4",
-        "prompt_tokens": 807,
-        "completion_tokens": 338,
+        "prompt_tokens": 700,
+        "completion_tokens": 312,
         "retries": 0,
-        "elapsed_seconds": 62.016,
+        "elapsed_seconds": 61.188,
         "retry_reasons": []
       }
     ],
@@ -93,7 +99,7 @@
     "validation_status": null,
     "validation_model": null
   },
-  "design_markdown": "## 1. Architecture overview\nA modular monolith architecture is proposed (to be confirmed) for this mobile club application. This style fits the moderate scale of 800 users by minimizing operational overhead compared to microservices while keeping codebases manageable. The main building blocks include a backend API service, a relational database, and a mobile client. This approach allows for efficient development without the complexity of distributed systems. The lack of specified external integrations or high-performance needs supports this centralized design choice for maintainability and simplicity.\n\n## 2. Components and responsibilities\n- **Mobile Client:** Handles event viewing, RSVP submissions, and announcement posting interfaces for club members.\n- **API Backend:** Processes authentication, manages event data, and handles RSVP logic for all user interactions.\n- **Database:** Stores event details, user identities, RSVP statuses, and announcements persistently.\n- **Authentication Service:** Verifies user identities to ensure only authorized club members can access the app.\n\n## 3. Data flow\nA user taps an action in the mobile app, sending an HTTPS request to the API backend. The API verifies the user\u2019s identity before processing the command. If creating an event, the API writes the new record to the database. For an RSVP, the API updates the relevant event record. Finally, the API returns a confirmation to the client, which displays the updated status to the user.\n\n## 4. API architecture\nSince no specific API style was decided, this is tentative. A REST approach is proposed as it fits mobile clients needing simple CRUD operations for events and RSVPs. Main endpoints would include creating events, submitting RSVPs, and posting announcements. This design assumes standard HTTP verbs and JSON payloads. Because no explicit decision was made regarding API style, this remains an uncertainty to be confirmed. The architecture supports the core features without requiring complex synchronous communication protocols.\n\n## 5. Database architecture and data model\nNo database selection was specified, so this choice is proposed (to be confirmed). A relational database is suggested to store events, users, RSVPs, and announcements. Relationships link users to events via RSVPs and enable announcements to reach all members. Since the scale of 800 users is modest, extensive indexing or partitioning is not needed initially. Data model integrity relies on user identity verification as assumed. Specific storage preferences remain unclear, leaving this foundational choice open for further review.\n\n## 6. Authentication\nThe authentication mechanism is unspecified. Since user identities are assumed to be verified for access, a secure login protocol is essential. Given no decisions were made, the model proposes OAuth 2.0 with institutional federation to leverage existing school or organizational directories. This approach automatically verifies membership status without manual approval. Session tokens would typically have a limited lifetime to enhance security, though specific durations are not defined in the project data.\n\n## 7. Caching\nCaching needs are unclear. The primary content includes events, RSVPs, and announcements, which change infrequently compared to general web traffic. A cache layer for these read-heavy items could improve performance for the 800 expected users. However, no caching technology was selected or mandated. The design assumes a lightweight in-memory cache for server-side acceleration, but this remains a model choice pending confirmation regarding performance requirements.\n\n## 8. External services\nNo external integrations are explicitly listed in the requirements. The core features of posting events, sending RSVPs, and distributing announcements function within the application boundary. Consequently, the design does not depend on vendor services for payments, mapping, or real-time communication. All data handling and user interaction logic remains self-contained within the mobile application and its primary backend infrastructure.\n\n## 9. Security considerations\n- **Access Control:** RBAC ensures only club administrators can post events and send announcements, preventing unauthorized modifications to shared content.\n- **Input Validation:** Server-side validation checks all RSVP and event submissions against strict schemas to prevent injection attacks and data corruption.\n- **Secrets Handling:** Credentials are stored in a dedicated secrets manager, never embedded in code, to protect against leakage during deployment.\n- **Audit Logging:** All administrative actions like posting or deleting events are recorded to track usage and maintain accountability.\n\n## 10. Scaling\nSince no architecture decisions were provided, the system design assumes a monolithic backend service chosen by the model. With an expected user base of eight hundred, the workload is modest and likely manageable by a single application instance. Horizontal scaling is not proposed at this stage because the projected traffic does not justify the added complexity. If future growth exceeds current capacity, the stateless nature of the proposed API layer would allow instances to be added incrementally. Data storage would initially reside on a single managed database instance. No specific metrics for peak requests per second are given, so scaling strategies remain generic until performance baselines are established.\n\n## 11. Failure handling\nComponent failures are managed through standard timeout mechanisms and client-side retry logic for transient network issues. If the backend or database becomes unavailable, the mobile application displays a user-friendly error message indicating service unavailability. No complex fallback strategies or circuit breaker patterns are specified due to the small scale. Since no external integrations are defined, there are no third-party dependencies to handle. Data integrity during failures is left unspecified, as transaction boundaries and error recovery policies were not mentioned in the requirements.\n\n## 12. Trade-offs and rationale\n*   Chose a monolithic structure over microservices to reduce development overhead for a small user base.\n*   Selected standard HTTP APIs instead of real-time websockets because real-time requirements are currently unknown.\n*   Avoided complex authentication layers since identity verification methods are unspecified.\n*   Deferred media storage decisions because no constraints on file types or sizes were provided.\nAlternatives like distributed systems were rejected because their costs outweigh benefits for eight hundred users.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Geospatial\n- Authentication\n- Search filtering\n- Media storage\n- Payments\n- Offline support\n\n### Other open questions\n- Notification delivery method preference",
+  "design_markdown": "## 1. Architecture overview\nWe select a modular monolith for this mobile platform, as the modest scale of 800 users supports a unified backend that minimizes complexity and network latency. This architecture groups functionality into distinct components while deploying as a single cohesive service. Three main blocks define the system: a secure API gateway, a central business logic core, and a relational persistence layer. This setup ensures reliable data consistency for RSVPs and announcements without the overhead of distributed service coordination. The modular structure allows isolated testing of feature modules, supporting rapid iteration for club-specific workflows.\n\n## 2. Components and responsibilities\n*   **API Gateway:** Handles all mobile client traffic, enforcing authentication tokens to verify club membership or organizer status before request forwarding.\n*   **Event Store:** Manages event creation, viewing, and RSVP status updates, applying permission checks to restrict editing rights to authorized administrators.\n*   **Announcement Engine:** Processes outgoing club notices and manages inbound receipt records to ensure timely notification delivery for all active members.\n*   **Identity Service:** Verifies user credentials and role assignments, maintaining the security boundary between standard members and elevated organizer accounts.\n\n## 3. Data flow\nA mobile client initiates a request by attaching a validated user token to the API gateway, which verifies the caller\u2019s role before proceeding. The request proceeds to the specific business module, such as the event store for RSVP submissions. The module validates the operation against current database records and updates the persistence layer with the new status. Finally, the API gateway returns the processed result to the mobile client, confirming the change was successfully recorded in the central system.\n\n## 4. API architecture\nA RESTful API is appropriate for this mobile application because it aligns with standard HTTP semantics and simplifies caching mechanisms for event lists. The backend exposes resources for events, announcements, and RSVPs, each supporting standard CRUD operations. Endpoints are structured by resource path, such as /events and /announcements, allowing the client to fetch data via GET and submit changes via POST. Role-based authorization ensures that only organizers can create events or broadcast announcements, while members restrict access to viewing and RSVPing. JSON serves as the primary data exchange format, with consistent HTTP status codes conveying success or validation errors to the mobile client.\n\n## 5. Database architecture and data model\nPostgreSQL is selected as the relational database engine due to its robustness and transactional reliability. The data model centers on Users, Events, RSVPs, and Announcements. A User links to many Events as an organizer or to many RSVPs as a participant. Each Event connects to multiple RSVPs, capturing attendance status. Announcements are associated with the club or specific users, directed to the entire membership. Standard B-tree indexes are applied to foreign keys and timestamps to optimize query performance during event weeks. No complex partitioning is required given the moderate user scale of 800 members and unspecified peak request rates.\n\n## 6. Authentication\nAccess is restricted to verified club members and admins using JSON Web Tokens (JWT) signed with HMAC-SHA256. Members authenticate via email and password; admins receive elevated permissions upon role verification. Token validity is set to 24 hours to balance security with user convenience during active event weeks. No permanent sessions are stored on the server.\n\n## 7. Caching\nA Redis instance acts as the caching layer to reduce database load during peak activity. Event listings are cached for five minutes, while individual event details persist for fifteen minutes to maintain consistency across user devices. RSVP status changes invalidate the specific event\u2019s cache entry immediately, ensuring real-time accuracy. This setup prevents database saturation when hundreds of members view the same event simultaneously.\n\n## 8. External services\nNo third-party API integrations are required for core functionality. A transactional email service handles password resets, notification announcements, and RSVP confirmations. A cloud storage bucket stores profile avatars and event media images. Both services operate behind standard HTTPS endpoints. No payment processors, mapping APIs, or social media login providers are currently integrated or planned for this phase.\n\n## 9. Security considerations\n*   **Input Validation:** All form fields are sanitized and type-checked server-side to prevent injection attacks.\n*   **Secrets Handling:** API keys and cryptographic secrets reside in environment variables, never in code repositories.\n*   **Access Control:** Role-based access control (RBAC) ensures only admins can post or edit events. Members can only view and RSVP.\n*   **Transport Security:** All client-server communication is encrypted via TLS 1.2 or higher to protect against man-in-the-middle attacks.\n\n## 10. Scaling\nAt 800 users, a single server instance handles expected load easily. However, because activity clusters around event weeks, the backend should anticipate traffic spikes. Since no peak RPS is specified, we cannot pre-size for extreme load. We recommend a simple stateless API layer behind a load balancer, allowing vertical scaling first. If concurrent connections grow, adding horizontal nodes requires only load-balancer configuration, not code changes. A managed database handles storage growth without application-level intervention.\n\n## 11. Failure handling\nPrimary risk is database unavailability during high-traffic periods. Implement request timeouts and exponential backoff retries for non-GET operations. If the API fails, clients should display a cached offline copy with a clear status message. Since no external integrations exist, failure isolation is straightforward. Database backups run nightly to prevent data loss. Critical RSVP actions must be idempotent to handle duplicate requests during transient network failures.\n\n## 12. Trade-offs and rationale\n-   **Monolithic backend:** Avoids microservice complexity manageable for 800 users. Splitting into services adds deployment overhead without clear benefit.\n-   **Managed database:** Delivers automated backups and failover. Self-hosted databases increase operational burden for minimal cost savings.\n-   **No offline support:** Requirements do not specify offline needs. Adding full offline sync increases complexity unnecessarily.\n-   **Simple authentication:** Sufficient for closed club access. Complex identity providers are overkill for this scale.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Geospatial\n- Authentication\n- Search filtering\n- Media storage\n- Payments\n- Offline support",
   "design_warnings": [],
   "validation": null,
   "revisions": null

@@ -1,19 +1,20 @@
 {
   "stage": "designed",
   "requirements": {
-    "project_summary": "A mobile to-do application supporting offline functionality, cross-device synchronization, and list sharing for family members, projected for 10,000 users.",
+    "project_summary": "A mobile to-do application supporting offline usage, cross-device synchronization, and family list sharing for 10,000 users.",
     "app_type": null,
     "core_features": [
-      "Create and manage to-do lists",
+      "Manage to-do lists",
       "Offline operation on mobile devices",
-      "Sync lists across devices when online",
+      "Sync data across devices when online",
       "Share lists with family members"
     ],
     "user_roles": [
-      "Family member"
+      "User",
+      "Family Member"
     ],
     "expected_scale": {
-      "users": "10,000 users",
+      "users": "10,000",
       "peak_requests_per_second": null,
       "data_volume": null
     },
@@ -27,8 +28,8 @@
     "external_integrations": [],
     "constraints": [],
     "assumptions": [
-      "User accounts are required to sync and share lists",
-      "Basic user identification is implicit in sharing features"
+      "Direct device-to-device sync not required",
+      "Cloud backend needed for cross-device sync"
     ],
     "unknowns": [
       "app_type not specified",
@@ -37,8 +38,7 @@
       "authentication not specified",
       "search_filtering not specified",
       "media_storage not specified",
-      "payments not specified",
-      "Notification preferences for shared list updates"
+      "payments not specified"
     ],
     "evidence": {
       "offline_support": "works offline on phones"
@@ -52,39 +52,39 @@
     "decision_billing": null,
     "decision_cost": null,
     "llm_model": "qwen/qwen3.8-27b",
-    "design_prompt_tokens": 3538,
-    "design_completion_tokens": 1181,
+    "design_prompt_tokens": 2966,
+    "design_completion_tokens": 1384,
     "design_group_stats": [
       {
         "id": "g1",
-        "prompt_tokens": 882,
-        "completion_tokens": 307,
+        "prompt_tokens": 739,
+        "completion_tokens": 329,
         "retries": 0,
-        "elapsed_seconds": 1.141,
+        "elapsed_seconds": 0.921,
         "retry_reasons": []
       },
       {
         "id": "g2",
-        "prompt_tokens": 853,
-        "completion_tokens": 223,
+        "prompt_tokens": 710,
+        "completion_tokens": 293,
         "retries": 0,
-        "elapsed_seconds": 61.75,
+        "elapsed_seconds": 60.844,
         "retry_reasons": []
       },
       {
         "id": "g3",
-        "prompt_tokens": 921,
-        "completion_tokens": 301,
+        "prompt_tokens": 778,
+        "completion_tokens": 430,
         "retries": 0,
-        "elapsed_seconds": 60.843,
+        "elapsed_seconds": 61.25,
         "retry_reasons": []
       },
       {
         "id": "g4",
-        "prompt_tokens": 882,
-        "completion_tokens": 350,
+        "prompt_tokens": 739,
+        "completion_tokens": 332,
         "retries": 0,
-        "elapsed_seconds": 61.266,
+        "elapsed_seconds": 61.297,
         "retry_reasons": []
       }
     ],
@@ -94,10 +94,8 @@
     "validation_status": null,
     "validation_model": null
   },
-  "design_markdown": "## 1. Architecture overview\nA modular monolith style is selected for this project. This approach keeps deployment simple while allowing distinct internal boundaries for list management, synchronization, and sharing logic. The expected scale of 10,000 users does not currently demand distributed microservices. Since no specific decisions were provided, this structure is chosen by the model to balance offline-first requirements with manageable backend complexity.\n\n## 2. Components and responsibilities\n*   **Client Application**: Manages local storage for offline access, handles user interaction with to-do lists, and triggers synchronization when connectivity is available.\n*   **Sync Service**: Orchestrates data consistency across devices, resolves conflicts between local and server states, and manages real-time push updates for shared lists.\n*   **List Manager**: Owns the core CRUD operations for to-do items, enforces access control for family shares, and maintains list metadata.\n*   **User Service**: Handles account creation and basic identification necessary for enabling list sharing and cross-device synchronization features.\n\n## 3. Data flow\nA request originates in the client application, which first reads from local storage if offline. When online, the client sends create, update, or delete actions to the sync service. This service validates the data against the list manager for ownership and sharing permissions. Validated changes are then persisted to the central database. Finally, the sync service notifies other connected devices belonging to family members, prompting their client applications to update their local caches with the new data.\n\n## 4. API architecture\nSince no decisions were provided, the model chose a RESTful API. This style fits well with standard list management operations and is straightforward for client integration. It supports simple CRUD actions essential for creating, reading, updating, and deleting to-do items. The API includes endpoints for user authentication, list creation, item management, and cross-device synchronization. Versioning via URI paths ensures backward compatibility. Error handling follows standard HTTP codes to facilitate clear communication between client and server during sync conflicts or permission checks.\n\n## 5. Database architecture and data model\nThe model selected a relational database to ensure data integrity for shared lists. Main entities include users, lists, items, and access permissions. Each list belongs to a primary owner but can be shared with other users via permission records linking users to specific lists. Items are child entities of lists, storing title, status, and due date. Given the specified scale of ten thousand users, standard primary key indexing suffices without requiring complex partitioning strategies. This structure supports efficient querying of lists filtered by owner or shared access status for family members.\n\n## 6. Authentication\nAuthentication is not specified in the requirements, but implicit assumptions indicate user accounts are required for syncing and sharing lists across family members. The design needs a standard identity mechanism to verify users and authorize access to shared lists. Token or session lifetime details are not yet decided, and the platform\u2019s app type being unspecified leaves the authentication strategy open for further discussion.\n\n## 7. Caching\nCaching is needed to support offline operation on mobile devices. Local client-side storage will cache to-do lists so users can create, view, and manage tasks without network connectivity. When online, cached data syncs with server state. No specific caching layer was chosen in the decisions, so this remains an implementation detail to be confirmed during development.\n\n## 8. External services\nNo external integrations are listed in the requirements. The client application will operate using its own internal services for syncing across devices and sharing lists. No third-party dependencies for push notifications, cloud storage, or identity providers are specified or anticipated in the current scope.\n\n## 9. Security considerations\n- Access control ensures users can only view and modify lists they own or have been explicitly shared with by family members.\n- Input validation prevents injection attacks when modifying to-do items and list metadata.\n- Secrets handling requires secure storage of authentication tokens on client devices and encrypted transmission between client and server.\n- Offline mode must not expose list data to unauthorized applications on the same device, requiring secure local storage.\n\n## 10. Scaling\nThe system targets approximately 10,000 users, which allows for a modest initial infrastructure footprint. Horizontal scaling is not explicitly mandated by current decisions, so the architecture assumes a baseline single-instance or small cluster configuration. As user count or traffic grows, the design permits adding instances behind a load balancer. Since peak requests per second are unspecified, precise capacity planning remains tentative. The platform was not specified, so the client application must be prepared to distribute requests efficiently. Data volume is unspecified, meaning storage capacity is proposed (to be confirmed) based on actual list usage. No specific numbers for concurrent connections were provided, so growth strategies remain general.\n\n## 11. Failure handling\nIf the synchronization service becomes unavailable, the client application continues to function offline, storing changes locally. When connectivity returns, the system attempts to sync pending updates. Retries are proposed for transient network failures during synchronization. If user authentication fails, the client should prevent data sharing attempts. Specific timeout durations are not yet decided because request metrics are unclear. The design does not currently define a full fallback mechanism for database outages. These behaviors are provisional pending confirmation of network reliability expectations.\n\n## 12. Trade-offs and rationale\n- Chose simple local storage for offline mode to reduce complexity, though this limits query capability.\n- Deferred real-time notifications to simplify initial development, accepting potential delayed updates for family members.\n- Assumed standard account authentication rather than specialized SSO integration to keep scope manageable.\n- Avoided complex geolocation features due to unspecified requirements, preserving bandwidth for core sync operations.\n- Kept data model flat to simplify sharing logic, trading future extensibility for immediate clarity.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Geospatial\n- Authentication\n- Search filtering\n- Media storage\n- Payments\n- App type\n\n### Other open questions\n- Notification preferences for shared list updates",
-  "design_warnings": [
-    "platform assumed"
-  ],
+  "design_markdown": "## 1. Architecture overview\nThe system follows a modular monolith architecture, which is appropriate for this project\u2019s scope and team size. This approach allows independent scaling of sync, authentication, and sharing modules while maintaining a single deployable unit. The main building blocks are a REST/GraphQL API server, a relational database, and a background job worker handling sync conflicts and notifications. A lightweight GraphQL gateway sits in front of the API server to simplify client queries across multiple domains.\n\n## 2. Components and responsibilities\n- **Client Application**: Manages local to-do lists, caches data for offline operation, and triggers sync when connectivity is restored.\n- **API Gateway**: Routes all client requests, enforces authentication, and load-balances requests to the backend services.\n- **User & Family Service**: Manages user accounts, family group memberships, and access permissions for list sharing.\n- **Task Service**: Owns to-do list and item CRUD operations, including offline conflict detection logic.\n- **Sync Service**: Handles bidirectional data reconciliation between devices when online, resolving conflicting updates.\n- **Relational Database**: Stores persistent user, list, and task data.\n\n## 3. Data flow\nA user opens the client application in offline mode to view cached to-do lists. Upon regaining connectivity, the client application submits pending changes to the Sync Service. The service reads the latest state from the Relational Database, applies conflict resolution rules, and writes updates. If a user shares a list, the User & Family Service updates membership records. Subsequent syncs propagate these changes to all linked family devices.\n\n## 4. API architecture\nA RESTful API style is adopted because it simplifies client implementation for standard CRUD operations and plays well with HTTP caching for offline storage. The backend exposes resources for lists, tasks, and sharing permissions, allowing the client application to fetch, create, update, and delete data independently. Each list entity includes metadata for family access control, while tasks are nested under their parent list. Basic state management relies on versioning numbers; clients compare local task versions to detect conflicts during synchronization when the client application reconnects. Error responses follow standard HTTP status codes, using 409 specifically for sync conflicts to guide client-side merge logic without complex custom protocols.\n\n## 5. Database architecture and data model\nPostgreSQL is selected for its robust JSONB support, which accommodates flexible task attributes without frequent schema migrations. The data model centers on three entities: Users, Lists, and Tasks. Users link to Lists through a many-to-many relationship to support family sharing, mediated by a ListMembers join table that stores role permissions. Each List contains multiple Tasks, forming a one-to-many relationship. For scale targets of 10,000 users, standard B-tree indexes on list IDs and user IDs suffice without requiring partitioning. A unique constraint ensures list ownership integrity, while a full-text search index may be added later if search requirements are defined. Data volume remains unspecified, so no specific sharding strategy is implemented initially.\n\n## 6. Authentication\nUsers and Family Members access the platform via secure server-side session tokens. Each authenticated device receives a unique identifier allowing it to fetch and push changes to cloud storage only for lists it owns or has been granted explicit permission to view. To protect user privacy on shared hardware, the client application revokes access when a user logs out, ensuring that residual local data remains encrypted until the next successful credential verification. No additional third-party identity providers are integrated into this design.\n\n## 7. Caching\nLocal caching is essential to satisfy the offline operation requirement. The client application maintains a persistent, encrypted SQLite database that stores the complete graph of lists, tasks, and ownership relationships. This local cache serves as the source of truth when the network is unavailable. When connectivity is restored, a background synchronization service calculates the delta against the cloud backend, applies remote modifications in a conflict-free manner, and pushes pending local updates. This effective caching layer eliminates the need for separate in-memory server-side caching in this design.\n\n## 8. External services\nThis project does not depend on any external services or integrations. All core functionality, including offline task management and online data synchronization, is delivered by the in-house backend infrastructure. No third-party communication pipelines, authentication providers, or payment gateways are required. The cloud backend acts as the sole dependency, managing the persistent state and coordination logic required to keep multiple client applications in sync. This self-contained architecture simplifies maintenance and reduces third-party integration complexity.\n\n## 9. Security considerations\n*   The backend automatically rejects and sanitizes any unsanitized user input prior to database persistence, effectively mitigating injection-based vulnerabilities across all API endpoints.\n*   Server-side secrets and cryptographic keys are isolated within environment variables, preventing direct access via configuration repositories or executable code.\n*   Server-side authorization logic strictly validates ownership and sharing privileges before processing every API request, ensuring that Family Members cannot exceed the access boundaries granted by the primary User.\n*   Sensitive tokens stored via local caching are encrypted using the platform\u2019s secure hardware keystore, preventing unauthorized extraction from device memory.\n\n## 10. Scaling\nThe system targets approximately 10,000 users, which fits comfortably within a horizontally scalable distributed backend. A relational database handles metadata, while separate service instances manage sync logic. As traffic increases, horizontal scaling adds compute nodes behind a load balancer. Stateless API servers allow dynamic capacity adjustments. Data partitioning by user ID ensures linear growth in storage and processing. No sharding is required for the current user base, but the architecture supports it if user counts grow significantly.\n\n## 11. Failure handling\nThe client application operates fully offline, ensuring task management continues during network outages. When back online, the client attempts to sync pending changes. The backend uses retry logic with exponential backoff for temporary network issues. Timeouts prevent indefinite hangs during sync operations. If the database is unavailable, the API returns a temporary failure code, prompting the client to cache changes locally. No fallback mechanisms are needed for core data integrity, as the design prioritizes eventual consistency over immediate availability.\n\n## 12. Trade-offs and rationale\n*   **Cloud sync over direct sync:** Chosen for simplified infrastructure and robust security, despite higher latency than peer-to-peer options.\n*   **Eventual consistency:** Accepts minor delays in cross-device updates to enable reliable offline functionality and reduce complex conflict resolution overhead.\n*   **Relational database:** Selected for strong data consistency in list structures, rather than NoSQL, due to structured share relationships.\n*   **No external integrations:** Keeps the attack surface small and reduces vendor lock-in, aligning with the focus on core list management features.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Geospatial\n- Authentication\n- Search filtering\n- Media storage\n- Payments\n- App type",
+  "design_warnings": [],
   "validation": null,
   "revisions": null
 }

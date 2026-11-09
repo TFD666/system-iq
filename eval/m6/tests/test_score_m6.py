@@ -76,14 +76,52 @@ def test_tech_choices_picks_most_mentioned_term_per_category():
     assert result["tech_choices"]["architecture"] == "microservices"
 
 
-def test_tech_choices_is_mixed_on_a_tie_and_none_on_no_mention():
-    # Was "none" on a tie -- the new spec gives "mixed" for a real tie and
-    # reserves "none" for zero mentions only.
+def test_tech_choices_breaks_a_tie_by_earliest_mention_and_none_on_no_mention():
+    # Was "mixed" on any tie -- ties are now broken by whichever tied term
+    # was mentioned first in the designated section; REST comes first here.
     markdown = _headings_markdown({4: "REST GraphQL"})  # 1 mention each -- a tie
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
     result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
-    assert result["tech_choices"]["api_style"] == "mixed"
+    assert result["tech_choices"]["api_style"] == "REST"
     assert result["tech_choices"]["database"] == "none"  # never mentioned
+
+
+def test_api_style_is_detected_in_section_4_only_by_default():
+    # GraphQL sits in section 1, outside api_style's designated section (4),
+    # and must be ignored while section 4 has its own mention.
+    markdown = _headings_markdown({4: "REST", 1: "GraphQL"})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_choices"]["api_style"] == "REST"
+    assert result["tech_counts"]["api_style"]["GraphQL"] == 0
+    assert result["tech_scope"]["api_style"] == "designated"
+
+
+def test_api_style_falls_back_to_1_12_when_section_4_has_no_mention():
+    # No mention in section 4 at all -- falls back to the full 1-12 text,
+    # where GraphQL (in section 1) is then found.
+    markdown = _headings_markdown({1: "GraphQL"})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_choices"]["api_style"] == "GraphQL"
+    assert result["tech_scope"]["api_style"] == "fallback (1-12)"
+
+
+def test_database_is_detected_in_section_5_only_by_default():
+    markdown = _headings_markdown({5: "PostgreSQL", 2: "MongoDB"})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_choices"]["database"] == "PostgreSQL"
+    assert result["tech_scope"]["database"] == "designated"
+
+
+def test_architecture_is_detected_in_sections_1_and_2_only_by_default():
+    markdown = _headings_markdown({1: "monolith", 4: "microservices"})  # 4 is outside 1-2
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_choices"]["architecture"] == "monolith"
+    assert result["tech_counts"]["architecture"]["microservices"] == 0
+    assert result["tech_scope"]["architecture"] == "designated"
 
 
 def test_restful_and_rest_api_both_count_as_rest():
@@ -95,12 +133,14 @@ def test_restful_and_rest_api_both_count_as_rest():
 
 
 def test_modular_monolith_is_not_also_counted_as_plain_monolith():
+    # Architecture is detected in sections 1-2; a 1-vs-1 tie is broken by
+    # earliest mention -- "modular monolith" comes first here.
     markdown = _headings_markdown({1: "A modular monolith architecture, not a plain monolith elsewhere."})
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
     result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
     assert result["tech_counts"]["architecture"]["modular monolith"] == 1
     assert result["tech_counts"]["architecture"]["monolith"] == 1  # only the standalone mention
-    assert result["tech_choices"]["architecture"] == "mixed"  # 1 vs 1 -- a real tie
+    assert result["tech_choices"]["architecture"] == "modular monolith"
 
 
 def test_database_synonyms_postgres_and_postgis_count_toward_postgresql():
@@ -133,6 +173,64 @@ def test_numeric_claims_vs_unsupported_numbers_mixed_support():
     result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "a platform for 1000 users")
     assert result["numeric_claims"] == 2       # both "1000 users" and "500 sellers" are claims
     assert result["unsupported_numbers"] == 1  # only 500 sellers is unbacked
+
+
+def test_unsupported_listing_has_number_unit_and_design_text_context():
+    markdown = _headings_markdown({1: "The system expects 500 users during peak hours each day."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "no numbers in the idea")
+
+    assert len(result["unsupported_listing"]) == 1
+    claim = result["unsupported_listing"][0]
+    assert claim["number"] == "500"
+    assert claim["unit"] == "users"
+    assert "500" in claim["context"]
+    assert "idea" not in claim["context"]  # never idea text, only design text
+    assert len(claim["context"].split()) <= 4 + 1 + 4  # up to 4 words each side + the number itself
+
+
+def test_unsupported_listing_is_empty_when_every_claim_is_supported():
+    markdown = _headings_markdown({1: "The system expects 1000 users."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {"expected_scale": {}}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "an app for 1000 users")
+    assert result["unsupported_listing"] == []
+
+
+def test_render_report_lists_unsupported_numbers_section(_env):
+    ideas_dir, runs_dir = _env
+    markdown = _headings_markdown({1: "We expect 500 sellers on day one."})
+    body = {
+        "design_markdown": markdown, "design_warnings": [], "requirements": {"expected_scale": {}},
+        "meta": {"llm_model": "x", "design_group_stats": [{"elapsed_seconds": 1.0}]},
+    }
+    _write_run(runs_dir, "idea1__A__r1", {"idea": "idea1", "version": "A", "repeat": 1}, body)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir)
+    report = sm.render_report(data)
+
+    assert "## Unsupported numbers" in report
+    assert "idea1__A__r1" in report
+    assert "500 (sellers)" in report
+    assert report.isascii()
+
+
+def test_render_report_says_none_when_no_unsupported_numbers(_env):
+    ideas_dir, runs_dir = _env
+    markdown = _headings_markdown({1: "We expect 1000 users."})
+    body = {
+        "design_markdown": markdown, "design_warnings": [], "requirements": {"expected_scale": {}},
+        "meta": {"llm_model": "x", "design_group_stats": [{"elapsed_seconds": 1.0}]},
+    }
+    _write_run(runs_dir, "idea1__A__r1", {"idea": "idea1", "version": "A", "repeat": 1}, body)
+    # idea1.md (from the fixture) has no numbers, so this claim is unsupported --
+    # overwrite it so there is genuinely nothing unsupported for this test.
+    (ideas_dir / "idea1.md").write_text("An idea for 1000 users.", encoding="utf-8")
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir)
+    report = sm.render_report(data)
+
+    section = report.split("## Unsupported numbers")[1].split("## Consistency")[0]
+    assert "none" in section
 
 
 def test_unsupported_numbers_counts_unbacked_numeric_claims():

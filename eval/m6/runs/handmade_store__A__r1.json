@@ -1,22 +1,22 @@
 {
   "stage": "designed",
   "requirements": {
-    "project_summary": "An e-commerce platform for handmade goods connecting buyers with approximately 200 sellers, featuring product browsing, card payments, order tracking, seller management, and payout handling.",
+    "project_summary": "An e-commerce platform for handmade goods supporting 200 sellers, product listings, payments, and order tracking.",
     "app_type": null,
     "core_features": [
-      "Product browsing with photos",
-      "Search for products",
-      "Card payment processing",
-      "Order tracking for buyers",
+      "Product listings with photos",
+      "Buyer browsing and search",
+      "Card payments",
+      "Order tracking",
       "Seller listing management",
       "Seller payout management"
     ],
     "user_roles": [
-      "Buyers",
-      "Sellers"
+      "Buyer",
+      "Seller"
     ],
     "expected_scale": {
-      "users": "~200 sellers plus unspecified buyers",
+      "users": "around 200 sellers",
       "peak_requests_per_second": "500",
       "data_volume": null
     },
@@ -31,13 +31,11 @@
       "payment provider"
     ],
     "constraints": [
-      "small budget",
-      "two developers"
+      "budget is small",
+      "team size is two developers"
     ],
     "assumptions": [
-      "Web-based interface implied by 'online store' and card payment context",
-      "Authentication required for buyer order tracking and seller listing management",
-      "Media storage required to host product photos"
+      "Authentication is required to distinguish buyer and seller roles"
     ],
     "unknowns": [
       "app_type not specified",
@@ -46,12 +44,11 @@
       "authentication not specified",
       "media_storage not specified",
       "offline_support not specified",
-      "Exact number of buyers",
-      "Total data volume or storage requirements",
-      "Specific technology stack preferences"
+      "Specific data retention policies",
+      "Compliance requirements for payments"
     ],
     "evidence": {
-      "search_filtering": "browse and search products",
+      "search_filtering": "Buyers browse and search products",
       "payments": "pay by card"
     }
   },
@@ -63,39 +60,39 @@
     "decision_billing": null,
     "decision_cost": null,
     "llm_model": "qwen/qwen3.8-27b",
-    "design_prompt_tokens": 3830,
-    "design_completion_tokens": 1099,
+    "design_prompt_tokens": 3154,
+    "design_completion_tokens": 1272,
     "design_group_stats": [
       {
         "id": "g1",
-        "prompt_tokens": 955,
-        "completion_tokens": 292,
+        "prompt_tokens": 786,
+        "completion_tokens": 348,
         "retries": 0,
-        "elapsed_seconds": 1.157,
+        "elapsed_seconds": 1.11,
         "retry_reasons": []
       },
       {
         "id": "g2",
-        "prompt_tokens": 926,
-        "completion_tokens": 191,
+        "prompt_tokens": 757,
+        "completion_tokens": 276,
         "retries": 0,
-        "elapsed_seconds": 60.656,
+        "elapsed_seconds": 61.046,
         "retry_reasons": []
       },
       {
         "id": "g3",
-        "prompt_tokens": 994,
-        "completion_tokens": 295,
+        "prompt_tokens": 825,
+        "completion_tokens": 382,
         "retries": 0,
-        "elapsed_seconds": 60.844,
+        "elapsed_seconds": 61.985,
         "retry_reasons": []
       },
       {
         "id": "g4",
-        "prompt_tokens": 955,
-        "completion_tokens": 321,
+        "prompt_tokens": 786,
+        "completion_tokens": 266,
         "retries": 0,
-        "elapsed_seconds": 61.797,
+        "elapsed_seconds": 61.094,
         "retry_reasons": []
       }
     ],
@@ -105,7 +102,7 @@
     "validation_status": null,
     "validation_model": null
   },
-  "design_markdown": "## 1. Architecture overview\nGiven the small budget and two-developer team, a monolithic architecture is chosen by the model to minimize infrastructure complexity and operational overhead.\nThis style supports moderate scale with 500 requests per second using a single deployable unit.\nMain building blocks include a web interface for buyers and sellers, a central application server, and a primary database with external storage services.\n\n## 2. Components and responsibilities\n*   **Web Client**: Renders product listings, search results, and order dashboards for users.\n*   **Application Server**: Manages business logic, authentication, and handles all API requests from the client.\n*   **Database**: Stores user accounts, product catalogs, orders, and transaction records persistently.\n*   **Media Storage**: Hosts product photos and serves static assets to the client application.\n*   **Payment Gateway Integration**: Facilitates secure card processing and payer verification with external providers.\n\n## 3. Data flow\nThe client application sends browsing, search, or order requests to the application server.\nThe server authenticates the user against the database before processing the request.\nFor product searches, the server queries the database and retrieves photo URLs from media storage.\nPayment triggers a connection to the external provider, storing the confirmation result in the database upon success.\nOrder status updates are then reflected in the database and returned to the client for display.\n\n## 4. API architecture\nA RESTful API is selected for its simplicity and ease of debugging, which suits a two-developer team and a small budget. The main endpoints include product search and retrieval with photo URLs, order creation and status tracking for buyers, and listing creation and payout management for sellers. Error handling will use standard HTTP status codes and consistent JSON responses to ensure clear communication between the backend and the client application.\n\n## 5. Database architecture and data model\nA relational database, such as PostgreSQL, is appropriate to enforce data integrity for financial transactions and user relationships. Key entities include Users (distinguishing buyers and sellers), Products, Orders, Line Items, and Payouts. Users relate to Products for seller listings and to Orders for purchase history. Orders contain multiple Line Items, which link to Products and track specific purchase details. This structure supports search filtering and payment recording without requiring complex partitioning at the current scale.\n\n## 6. Authentication\nSince no specific authentication method is provided in the project data, a standard approach is chosen by the model to secure buyer order tracking and seller listing management. Session-based access is proposed for client application users. This method is selected to maintain a simple implementation suitable for two developers. The exact mechanism, such as passwords versus biometrics, remains undecided. This choice depends on the unspecified authentication requirements in the project scope.\n\n## 7. Caching\nCaching was not addressed in the available decisions, so its necessity is unclear. To support product browsing and search for peak request rates, in-memory caching is proposed. This would store frequently accessed product metadata to reduce database load. The specific caching layer is not yet decided. This choice relies on the unspecified data volume requirements.\n\n## 8. External services\nThe project depends on a payment provider for card transactions and seller payouts. An object storage service is proposed to host product photos, as no internal media storage was specified. No other external integrations are listed in the requirements. All service interfaces must support standard HTTPS for secure data transmission.\n\n## 9. Security considerations\n- Validate all user inputs during product search and order creation to prevent injection attacks.\n- Store payment credentials in encrypted environments and never log sensitive financial data.\n- Enforce role-based access control to restrict seller listing management to authorized vendors.\n- Use HTTPS for all client application communications to protect data in transit.\n\n## 10. Scaling\nThe system targets roughly two hundred sellers and a buyer count that is unspecified. Expected traffic reaches 500 peak requests per second. Because no scaling decisions were provided, no specific architecture was mandated. The team will choose infrastructure that handles this load. Standard horizontal scaling options like load balancing will be evaluated if loads increase. Current constraints of a small budget and two developers favor simple, manageable deployments initially. Growth paths remain open but undefined by the current requirements. No specific scalability patterns were confirmed in the provided data.\n\n## 11. Failure handling\nNo failure management decisions were specified in the project data. If the external payment provider becomes unavailable, order processing will likely halt. Standard retries and timeouts would be reasonable additions but are not yet decided. Media storage failures could affect product browsing, though specific fallbacks are not detailed. The small team size suggests manual monitoring might initially supplement automated alerts. Specific resilience patterns like circuit breakers were not requested. Handling strategies will be determined during implementation, given the lack of prior directives.\n\n## 12. Trade-offs and rationale\nThe design prioritizes simplicity over complex microservices due to the two-developer constraint. Managed services are likely chosen to reduce operational overhead and fit the small budget. Custom search engines were not specified, implying built-in database search capabilities are sufficient. Real-time features were not requested, so polling may be used for order tracking to simplify the backend. Specific technology stacks were not mandated, leaving choices open but leaning toward well-supported frameworks. No proprietary tools are evident, keeping licensing costs low.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Geospatial\n- Authentication\n- Media storage\n- Offline support\n- App type\n\n### Other open questions\n- Exact number of buyers\n- Total data volume or storage requirements\n- Specific technology stack preferences",
+  "design_markdown": "## 1. Architecture overview\nA modular monolith is the optimal style for this project. With only two developers and a small budget, microservices would introduce unnecessary operational complexity and communication overhead. The single deployable unit allows for simple local development and easy scaling within the current traffic limits. The system comprises a client application, a central API server, a relational database, and external media and payment services. This structure supports the required buyer and seller functionalities while maintaining code cohesion and minimizing infrastructure costs.\n\n## 2. Components and responsibilities\n*   **Client Application:** Manages user interface interactions for browsing, searching, checkout flows, and seller dashboard operations.\n*   **API Server:** Handles all business logic, including product categorization, cart management, order processing, and role-based access control.\n*   **Relational Database:** Stores product records, user credentials, user-specific role flags, order histories, and transaction statuses.\n*   **Media Storage Service:** Hosts and serves product photography, removing binary blob storage burdens from the primary database.\n*   **Payment Provider Integration:** Executes card payments and initiates seller payout processing via a secure, third-party gateway.\n\n## 3. Data flow\nA buyer initiates a search, prompting the client application to send a request to the API server. The API server queries the relational database for matching product records and returns the serialized data, which includes media URLs. Upon checkout, the client sends payment details via the API server to the external payment provider. Once the provider confirms the transaction, the API server writes the order details and status to the database. The client then polls for order status updates, reading from the database via the API to track fulfillment progress.\n\n## 4. API architecture\nA RESTful API is appropriate because it aligns with the two-developer team size and the simple, resource-oriented nature of the marketplace. Primary operations include:\n- `GET /products`: List items with search and filter parameters.\n- `POST /products`: Create seller listings with photo metadata.\n- `POST /orders`: Initiate card payments via the payment provider.\n- `GET /orders/{id}`: Track order status and payout details.\nRequests are authenticated via bearer tokens to distinguish buyer and seller roles. Errors follow standard HTTP status codes with JSON bodies containing descriptive messages, reducing client-side parsing complexity.\n\n## 5. Database architecture and data model\nPostgreSQL stores the core relational data, ensuring ACID compliance for financial transactions. Key entities include:\n- **Users**: Stores authentication credentials and role flags (buyer/seller).\n- **Products**: Links to sellers, includes title, price, and photo URLs.\n- **Orders**: Records transactions, status, and timestamps.\n- **Payouts**: Tracks seller earnings linked to completed orders.\n\nSellers have one-to-many relationships with both products and payouts. Buyers have one-to-many relationships with orders. A single index on `products.created_at` supports the peak of 500 requests per second without requiring partitioning.\n\n## 6. Authentication\nUser authentication is required to distinguish between Buyer and Seller roles, thereby controlling access to listing and payout management features. The client application will utilize a standard session or token mechanism to maintain user state securely. This approach directly addresses the core requirement of role-based access without incurring the operational overhead of complex third-party identity providers, keeping infrastructure costs aligned with the small budget.\n\n## 7. Caching\nCaching is required to manage the peak load of 500 requests per second. We will implement an in-memory data grid to store frequently accessed product listings and search results. This layer will reduce the pressure on the primary database during high-traffic search events. It also serves as a simple, cost-effective solution that allows two developers to maintain high performance without adding complex infrastructure maintenance scripts.\n\n## 8. External services\nThe system relies on a generic payment processing service to handle card transactions for purchases and financial payouts for sellers. This external service processes financial instruments securely and returns status updates to the application backend. Additionally, a secure digital object store is required to host high-resolution product photos for buyer browsing. This separation ensures that media assets do not consume excessive backend storage resources and facilitates faster image loading.\n\n## 9. Security considerations\n*   **Input Validation**: All search queries, filter parameters, and listing submissions will be strictly validated against defined schemas to prevent injection attacks and data corruption.\n*   **Secrets Handling**: API keys for the payment provider and media storage must be stored in an isolated secrets manager, never in application code or local configuration files.\n*   **Access Control**: Middleware will verify user roles on every request, ensuring buyers can only view listings while sellers can manage their own inventory and access financial details.\n*   **Data Protection**: Passwords and sensitive financial data will be encrypted at rest and in transit using industry-standard protocols.\n\n## 10. Scaling\nThe system is designed for approximately 200 sellers and 500 peak requests per second. Given the small team and budget, a single-tier monolithic architecture is appropriate initially. Horizontal scaling can be added later by placing a load balancer in front of multiple application instances if traffic exceeds current capacity. Database read replicas may be introduced for search-heavy workloads if necessary, but this is not required at the current scale.\n\n## 11. Failure handling\nPayment provider timeouts trigger automatic retries with exponential backoff. Failed payments leave orders in a \"pending\" state rather than being deleted. If the database becomes unavailable, the application returns a 503 error to clients. No complex fallback mechanisms are implemented due to the small team size; instead, clear error messages guide users and alert the development team for manual intervention.\n\n## 12. Trade-offs and rationale\n- **Monolith over microservices:** Reduces operational complexity and infrastructure costs, aligning with the two-developer team and small budget.\n- **No specialized search engine:** Standard database queries handle filtering, avoiding the complexity of managing Elasticsearch or similar tools.\n- **Basic monitoring:** Simple logging and uptime checks replace sophisticated observability platforms, keeping overhead low while maintaining visibility into system health.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Geospatial\n- Authentication\n- Media storage\n- Offline support\n- App type\n\n### Other open questions\n- Specific data retention policies\n- Compliance requirements for payments",
   "design_warnings": [],
   "validation": null,
   "revisions": null

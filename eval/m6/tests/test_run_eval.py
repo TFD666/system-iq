@@ -140,6 +140,46 @@ def test_refuses_to_save_fake_or_replay_b_runs(_env, monkeypatch, capsys, decisi
     assert "not saving" in out
 
 
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_retries_once_on_transient_status_then_saves(_env, monkeypatch, capsys, status):
+    ideas_dir, runs_dir = _env
+    responses = [_FakeResponse(status, {"detail": "upstream hiccup"}), _FakeResponse(200, _a_body())]
+
+    with patch("run_eval.httpx.post", side_effect=responses) as mock_post:
+        _run(["--ideas-dir", str(ideas_dir), "--only-idea", "idea1", "--only-version", "A", "--max-runs", "5"], monkeypatch)
+
+    assert mock_post.call_count == 2
+    assert (runs_dir / "idea1__A__r1.json").exists()
+    out = capsys.readouterr().out
+    assert "transient upstream error, retrying once" in out
+
+
+def test_transient_retry_failing_again_stops_as_usual(_env, monkeypatch, capsys):
+    ideas_dir, runs_dir = _env
+    responses = [_FakeResponse(503, {"detail": "still down"}), _FakeResponse(503, {"detail": "still down"})]
+
+    with patch("run_eval.httpx.post", side_effect=responses) as mock_post:
+        _run(["--ideas-dir", str(ideas_dir), "--only-idea", "idea1", "--only-version", "A", "--max-runs", "5"], monkeypatch)
+
+    assert mock_post.call_count == 2  # original + the one retry, never more
+    assert not (runs_dir / "idea1__A__r1.json").exists()
+    out = capsys.readouterr().out
+    assert "HTTP 503" in out
+    assert "stopped early" in out
+
+
+def test_never_retries_a_429(_env, monkeypatch, capsys):
+    ideas_dir, runs_dir = _env
+    with patch("run_eval.httpx.post", return_value=_FakeResponse(429, {"detail": "rate limited"})) as mock_post:
+        _run(["--ideas-dir", str(ideas_dir), "--only-idea", "idea1", "--only-version", "A", "--max-runs", "5"], monkeypatch)
+
+    assert mock_post.call_count == 1  # no retry for 429
+    assert not (runs_dir / "idea1__A__r1.json").exists()
+    out = capsys.readouterr().out
+    assert "transient upstream error" not in out
+    assert "HTTP 429" in out
+
+
 def test_saves_real_a_and_b_runs_with_meta(_env, monkeypatch):
     ideas_dir, runs_dir = _env
 

@@ -1,13 +1,15 @@
 {
   "stage": "designed",
   "requirements": {
-    "project_summary": "An application that allows users to find nearby bars.",
+    "project_summary": "A mobile application that allows users to discover bars in their vicinity.",
     "app_type": null,
     "core_features": [
-      "Find nearby bars"
+      "Location detection",
+      "List of nearby bars",
+      "Distance calculation"
     ],
     "user_roles": [
-      "generic_user"
+      "User"
     ],
     "expected_scale": {
       "users": null,
@@ -23,11 +25,12 @@
     "offline_support": null,
     "external_integrations": [
       "map provider",
-      "geolocation service"
+      "location data provider"
     ],
     "constraints": [],
     "assumptions": [
-      "Users will provide location data to determine nearby establishments"
+      "Users are mobile device holders",
+      "Uses device GPS for location"
     ],
     "unknowns": [
       "app_type not specified",
@@ -37,12 +40,11 @@
       "payments not specified",
       "offline_support not specified",
       "expected scale not specified",
-      "Specific filtering criteria beyond proximity",
-      "Data source for bar locations and operating hours"
+      "Specific UI requirements for bar details"
     ],
     "evidence": {
-      "geospatial": "app to find nearby bars",
-      "search_filtering": "app to find nearby bars"
+      "geospatial": "find nearby bars",
+      "search_filtering": "find nearby"
     }
   },
   "decisions": null,
@@ -53,39 +55,39 @@
     "decision_billing": null,
     "decision_cost": null,
     "llm_model": "qwen/qwen3.8-27b",
-    "design_prompt_tokens": 3482,
-    "design_completion_tokens": 1324,
+    "design_prompt_tokens": 2978,
+    "design_completion_tokens": 1326,
     "design_group_stats": [
       {
         "id": "g1",
-        "prompt_tokens": 868,
-        "completion_tokens": 306,
+        "prompt_tokens": 742,
+        "completion_tokens": 385,
         "retries": 0,
-        "elapsed_seconds": 0.844,
+        "elapsed_seconds": 1.562,
         "retry_reasons": []
       },
       {
         "id": "g2",
-        "prompt_tokens": 839,
-        "completion_tokens": 259,
+        "prompt_tokens": 713,
+        "completion_tokens": 311,
         "retries": 0,
-        "elapsed_seconds": 60.797,
+        "elapsed_seconds": 61.782,
         "retry_reasons": []
       },
       {
         "id": "g3",
-        "prompt_tokens": 907,
-        "completion_tokens": 397,
+        "prompt_tokens": 781,
+        "completion_tokens": 337,
         "retries": 0,
-        "elapsed_seconds": 61.234,
+        "elapsed_seconds": 61.281,
         "retry_reasons": []
       },
       {
         "id": "g4",
-        "prompt_tokens": 868,
-        "completion_tokens": 362,
+        "prompt_tokens": 742,
+        "completion_tokens": 293,
         "retries": 0,
-        "elapsed_seconds": 61.25,
+        "elapsed_seconds": 60.922,
         "retry_reasons": []
       }
     ],
@@ -95,7 +97,7 @@
     "validation_status": null,
     "validation_model": null
   },
-  "design_markdown": "## 1. Architecture overview\nThe system follows a modular monolith approach.\nThis choice fits the project because the expected scale and specific constraints are currently unspecified. The primary building blocks include a client application for interaction, a backend service for business logic, and an external integration layer. This structure keeps the core functionality intact while allowing future expansion if needs grow. The design avoids unnecessary complexity until actual traffic patterns or specific technical demands become clear to the development team.\n\n## 2. Components and responsibilities\n\u2022 Client Application: Manages user interface, captures device location via the geolocation service, and displays lists of nearby bars.\n\u2022 Backend Service: Processes proximity queries, filters results based on user requests, and coordinates with external data sources for establishment details.\n\u2022 External Integrations: Interfaces with the map provider for geospatial data and the geolocation service for determining user position accurately.\n\u2022 Data Store: Stores bar locations, operating hours, and any other static attributes retrieved from the predefined external data source.\n\n## 3. Data flow\nA user initiates a search by providing their current location.\nThe client application sends this coordinate data to the backend service. The backend forwards the request to the map provider and geolocation service to verify position context. It then queries the data store for bar locations matching the proximity criteria. The aggregated results are formatted and sent back to the client application for display. No data is written during this typical read-heavy request cycle, ensuring a lightweight and efficient user interaction pattern.\n\n## 4. API architecture\nNo specific API style is designated in the project data, so this component is to be confirmed. Reasonable options for a location-based client application include REST for broad compatibility or gRPC for lower latency, but the final choice remains uncertain. Core operations will focus on retrieving nearby bars based on user-submitting coordinates. Additional filtering criteria, such as operating hours or specific amenities, are currently unspecified, meaning the exact endpoint structure cannot be fully defined yet. Authentication mechanisms are also an open question, which affects how user identity and location data will be managed during these requests. The architecture must remain flexible to accommodate these unresolved requirements.\n\n## 5. Database architecture and data model\nThe specific database type is not yet decided, though a geospatial-capable solution is needed to store bar locations and support proximity searches. Primary entities will include establishments, holding details like name, coordinates, and status. Relationships between these entities are minimal since the system primarily aggregates static or semi-static location data. Specific filtering criteria beyond mere proximity are currently unknown, which limits the ability to define secondary entities or complex relational constraints. Data sources for operating hours remain unspecified, creating uncertainty in the data model\u2019s completeness. Indexing strategies will depend on the expected scale, which is currently unspecified.\n\n## 6. Authentication\nThe specific authentication mechanism is not specified in the provided data. Since the system uses a single generic user role, identity management applies to all client application users. The method for handling user sessions, token validity, or credential issuance is currently undecided. It remains unclear whether the system will use API keys, OAuth, or another standard. The dependency on unspecified requirements means the authentication architecture cannot be finalized. This choice is proposed and to be confirmed.\n\n## 7. Caching\nThe need for a dedicated caching layer is not yet decided. The system will likely benefit from caching frequently requested bar details and location data to reduce load on the map and geolocation services. However, the specific caching technology or strategy has not been selected. Since the application type and expected scale are unknown, the necessity of caching for performance optimization is unclear. The decision remains open pending further specifications on data volume and request patterns.\n\n## 8. External services\n*   Map provider: This service supplies the visual map interface and renders geographic data for the client application.\n*   Geolocation service: This integration captures the user's current physical coordinates to determine nearby establishments.\n\nThese services are essential for the core feature of finding nearby bars. The project depends on these external integrations to provide accurate spatial context. No other external integrations were listed in the requirements. Specific vendor names are not identified in the design.\n\n## 9. Security considerations\n*   Input validation: The client must sanitize location data and search queries to prevent injection attacks or malformed requests.\n*   Secrets handling: API keys for map and location providers must be stored securely on the server, never exposed in the client application.\n*   Access control: Since only one generic user role exists, access permissions are uniform, but rate limiting may be needed to prevent abuse.\n*   Data privacy: Location data is sensitive; the system should apply strict access controls and encryption for stored user preferences.\n\n## 10. Scaling\nBecause the expected user volume and peak request rates are unspecified, no specific scaling strategy is mandated. The design supports starting with a single server instance. If the client application traffic grows, horizontal scaling can be applied to the web service layer. This approach allows adding more server instances behind a load balancer to distribute incoming requests. This method ensures that the system can handle increased load without requiring a fundamental redesign of the core architecture. The geospatial queries and search filtering functions are stateless, making them ideal for this distributed expansion model.\n\n## 11. Failure handling\nWhen the external map provider or geolocation service becomes unavailable, the client application should display a clear error message to the user. The system should implement timeout mechanisms to prevent requests from hanging indefinitely during these outages. Retries can be added for transient network failures, but consistent failures should not block the entire interface. The core search functionality relies on these external integrations, so fallback caching of previously retrieved data is not currently proposed. Users will need to resolve the connection issue before accessing new nearby bar results.\n\n## 12. Trade-offs and rationale\n*   **Stateless Backend:** Chosen by the model. This simplifies deployment and scaling but increases dependency on external services for real-time data.\n*   **No Offline Support:** Not specified in requirements, so it was not implemented. This reduces application size and complexity but limits usability in low-connectivity areas.\n*   **No Authentication:** Not specified, so the system assumes generic user access. This lowers initial friction but prevents personalized features like saved favorites.\n*   **External Data Source:** Relies on an unspecified data provider for bar locations. This avoids maintaining internal databases but introduces potential licensing costs and vendor lock-in.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Authentication\n- Media storage\n- Payments\n- Offline support\n- App type\n- Expected scale\n\n### Other open questions\n- Specific filtering criteria beyond proximity\n- Data source for bar locations and operating hours",
+  "design_markdown": "## 1. Architecture overview\nThe system follows a modular monolith architecture to streamline development complexity for an unspecified scale while maintaining clear internal boundaries. This approach simplifies deployment and reduces network latency for location-centric features. The design stays on the server-side, with the client application handling only UI and initial data capture. Core modules manage geospatial queries, external provider orchestration, and bar listing logic. We rely on geospatial extensions in our data layer to efficiently filter nearby venues by distance. This structure allows future extraction of services if scale demands increase without immediate upfront complexity.\n\n## 2. Components and responsibilities\n\u2022 **Geolocation Module**: Validates and processes incoming location coordinates from the client application.\n\u2022 **Provider Integration Layer**: Orchestrates calls to the map and location data providers, handling timeouts and error states.\n\u2022 **Bar Registry Service**: Maintains the canonical list of bars and their static geographic attributes.\n\u2022 **Distance Calculation Engine**: Computes Euclidean or Haversine distances between the user\u2019s location and each known venue.\n\u2022 **Query API**: Exposes endpoints for retrieving nearby bars, supporting basic search and filtering parameters.\n\u2022 **Data Persistence**: Stores bar metadata and location coordinates, leveraging spatial indexing for rapid range queries.\n\n## 3. Data flow\nThe client application transmits the user\u2019s current GPS coordinates and a requested radius to the Query API. The Geolocation Module validates the input format before passing data to the Distance Calculation Engine. This engine consults the Data Persistence layer to retrieve bar coordinates within the specified geofence. Simultaneously, the Provider Integration Layer may fetch supplementary metadata from external map providers. The system calculates distances for all filtered venues and sorts them by proximity. Finally, the Query API returns a JSON payload containing the sorted list of nearby bars with their computed distances and details. No persistent user data is written during this transient request cycle.\n\n## 4. API architecture\nThe backend exposes a REST API to accommodate stateless interactions and standard HTTP caching, which suits the intermittent polling nature of a location-based discovery tool. The primary resources define bar entities and user location contexts.\n\nCore operations include:\n*   `GET /bars/nearby`: Accepts latitude and longitude query parameters to return a filtered list of proximal bars.\n*   `POST /location/ping`: Records the client device\u2019s current GPS coordinates for history or re-ranking purposes.\n\nExternal providers are accessed via dedicated adapter services, ensuring the core API remains insulated from third-party rate limits. Error responses follow a consistent JSON envelope containing machine-readable status codes and human-readable messages to simplify client-side UI error handling.\n\n## 5. Database architecture and data model\nPostgreSQL with the PostGIS extension handles all data persistence, providing robust support for spatial indexing and geographic queries. This configuration efficiently supports the requirement to calculate distances and filter results based on proximity.\n\nKey entities and relationships:\n*   **Bars**: Stores static details like name, address, and operational hours.\n*   **Locations**: References external map provider IDs and stores precise geospatial coordinates.\n*   **UserSessions**: Tracks client device coordinates to enable rapid proximity checks.\n\nThe `Bars` table integrates a `GEOMETRY` column. An `GiST` index accelerates spatial range and distance queries, ensuring responsive search results even as the number of listed bars grows. No partitioning is required at this stage.\n\n## 6. Authentication\nUser roles are limited to a standard \"User, but specific authentication requirements were not defined in the project data. Therefore, the authentication approach remains unspecified pending further requirements. We will implement a standard secure login mechanism once the specific vendor or protocol requirements are finalized. Consequently, session or token lifetime details cannot be reliably documented at this stage.\n\n## 7. Caching\nCaching is not detail for this project due to missing specific guidelines in the requirements. The system will rely directly on database queries for proximity searches. Consequently, no specific caching layer name can be assigned. If performance issues emerge during scaling, an in-memory cache may be introduced later to store frequent location lookups.\n\n## 8. External services\n- **Map provider:** Powers route rendering and geocoding requests for the user interface.\n- **Location data provider:** Supplies real-time geospatial coordinates from the user's device hardware.\n- **Geospatial database service:** Manages storage and query processing for bar location metadata.\n- **Distance calculation API:** Computes precise radial proximity metrics between user coordinates and bar locations.\n\n## 9. Security considerations\n- **Input validation:** Strictly format and validate all geospatial coordinates and search parameters server-side to prevent injection attacks.\n- **Secrets handling:** Store API keys and database credentials in a dedicated environment-based secret management system, never in code.\n- **Access control:** Enforce role-based permissions to ensure users can only view public bar data and their own location.\n- **Transport encryption:** Mandate TLS 1.3 for all communication between the client application and backend services.\n\n## 10. Scaling\nThe system accommodates growth through simple horizontal scaling of the application server layer. Because expected user counts and request rates are unspecified, the architecture relies on stateless backend services that can be replicated behind a load balancer. Geospatial queries and distance calculations are offloaded to the map provider, preventing local database bottlenecks as traffic increases. No complex sharding or automated scaling policies are defined, ensuring the infrastructure remains straightforward to operate while handling moderate growth.\n\n## 11. Failure handling\nIf the external map or location providers become unavailable, the client application displays a friendly error state rather than crashing. Integration calls include standard timeouts to prevent indefinite hanging, and retries occur only for transient network issues. Since there is no internal caching mechanism defined, the system fails open by hiding unavailable data temporarily. This prevents misleading results while ensuring the core interface remains responsive during partial outages.\n\n## 12. Trade-offs and rationale\n- **External dependency reliance:** Using a third-party map provider simplifies geospatial logic but introduces latency and cost variability, weighed against the complexity of building custom spatial indexing.\n- **No offline mode:** Ignoring unspecified offline support keeps synchronization logic simple, prioritizing real-time accuracy over cached availability for a minimal viable product.\n- **Single user role:** Excluding authentication or multi-role features reduces scope and complexity, focusing strictly on the core location-listing workflow without administrative overhead.\n\n## 13. Assumptions and open questions\n\n### Depends on unspecified requirements\n- Realtime\n- Authentication\n- Media storage\n- Payments\n- Offline support\n- App type\n- Expected scale\n\n### Other open questions\n- Specific UI requirements for bar details",
   "design_warnings": [],
   "validation": null,
   "revisions": null

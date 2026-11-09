@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from .design import TokenBudget, write_design
 from .extraction import ExtractionError, extract_requirements
-from .llm import DEFAULT_GROQ_MODEL, GroqAuthError, GroqProvider, LLMProvider, RateLimitError
+from .llm import DEFAULT_GROQ_MODEL, GroqAuthError, GroqProvider, LLMProvider, LLMUnavailableError, RateLimitError
 from .schemas import (
     DecisionMeta,
     DecisionResultOut,
@@ -92,6 +92,8 @@ def get_provider() -> LLMProvider:
 
 # Maps the DECISION_PROVIDER env var to a provider label for fake-mode detection.
 _FAKE_MODEL_LABEL = "fake (demo only)"
+
+_LLM_UNAVAILABLE_DETAIL = "The language model service is temporarily unavailable. Try again in a few minutes."
 
 
 def get_decision_provider() -> DecisionProvider:
@@ -270,6 +272,9 @@ def design(
             },
         )
 
+    except LLMUnavailableError:
+        return JSONResponse(status_code=503, content={"detail": _LLM_UNAVAILABLE_DETAIL})
+
     except (httpx.TimeoutException, httpx.NetworkError):
         return JSONResponse(
             status_code=504,
@@ -302,6 +307,9 @@ def design(
                     )
                 },
             )
+
+        except LLMUnavailableError:
+            return JSONResponse(status_code=503, content={"detail": _LLM_UNAVAILABLE_DETAIL})
 
         except Exception as e:
             logger.error("design: unexpected error while writing the design (%s)", type(e).__name__)
@@ -443,6 +451,9 @@ def design(
             },
         )
 
+    except LLMUnavailableError:
+        return JSONResponse(status_code=503, content={"detail": _LLM_UNAVAILABLE_DETAIL})
+
     except Exception as e:
         logger.error("design: unexpected error while writing the design (%s)", type(e).__name__)
         return JSONResponse(
@@ -482,6 +493,8 @@ def design(
             requirements, decision_results, design_result.markdown, request.max_revisions,
             llm, decision_provider,
         )
+    except LLMUnavailableError:
+        return JSONResponse(status_code=503, content={"detail": _LLM_UNAVAILABLE_DETAIL})
     except Exception as e:
         logger.error("validate: unexpected error during validation (%s)", type(e).__name__)
         return JSONResponse(
@@ -529,6 +542,8 @@ def validate_design(
             request.requirements, request.decisions, request.design_markdown,
             request.max_revisions, llm, decision_provider,
         )
+    except LLMUnavailableError:
+        return JSONResponse(status_code=503, content={"detail": _LLM_UNAVAILABLE_DETAIL})
     except Exception as e:
         logger.error("validate: unexpected error during validation (%s)", type(e).__name__)
         return JSONResponse(
