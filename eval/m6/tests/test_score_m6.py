@@ -96,6 +96,92 @@ def test_decision_adherence_in_designated_section_is_n_a_for_unmapped_decision_i
     assert result["decision_adherence_in_designated_section"] == "n/a"
 
 
+def test_decision_adherence_strict_excludes_a_negated_mention():
+    # Unfiltered adherence counts a bare substring match even in a negated
+    # sentence; strict additionally requires an unnegated mention.
+    markdown = _headings_markdown({4: "The design avoids REST and uses GraphQL instead."})
+    decisions = [{"id": "api_style", "status": "accepted", "choice": "REST", "probability": 0.8}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence"] == 1.0
+    assert result["decision_adherence_strict"] == 0.0
+
+
+def test_decision_adherence_strict_true_when_unnegated_mention_exists():
+    markdown = _headings_markdown({4: "We use REST for all endpoints."})
+    decisions = [{"id": "api_style", "status": "accepted", "choice": "REST", "probability": 0.8}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence"] == 1.0
+    assert result["decision_adherence_strict"] == 1.0
+
+
+def test_revalidation_overrides_flagged_and_possible_for_repeat_1(tmp_path):
+    revalidation_dir = tmp_path / "revalidation"
+    revalidation_dir.mkdir()
+    (revalidation_dir / "idea1.json").write_text(json.dumps([
+        {"id": "val_auth", "status": "flagged", "text": "Does the design address user authentication?"},
+        {"id": "val_search", "status": "possible", "text": "Does it search?"},
+    ]), encoding="utf-8")
+
+    own_validation = [{"id": "val_auth", "status": "ok", "text": "Does the design address user authentication?"}]
+    markdown = _headings_markdown({})
+    body = {
+        "design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {},
+        "validation": own_validation,
+    }
+    result = sm._score_one_run("x", body, {"idea": "idea1", "version": "B", "repeat": 1}, "", revalidation_dir)
+
+    assert result["flagged_ids"] == ["val_auth"]
+    assert result["possible_ids"] == ["val_search"]
+    assert result["validation_source"] == "revalidated"
+    assert result["non_ok_ids"] == ["val_auth", "val_search"]
+
+
+def test_no_revalidation_file_uses_own_validation(tmp_path):
+    revalidation_dir = tmp_path / "revalidation"  # never created -- no file for any idea
+    own_validation = [{"id": "val_auth", "status": "flagged", "text": "Does the design address user authentication?"}]
+    markdown = _headings_markdown({})
+    body = {
+        "design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {},
+        "validation": own_validation,
+    }
+    result = sm._score_one_run("x", body, {"idea": "idea1", "version": "B", "repeat": 1}, "", revalidation_dir)
+
+    assert result["flagged_ids"] == ["val_auth"]
+    assert result["validation_source"] == "own"
+
+
+def test_revalidation_override_only_applies_to_repeat_1(tmp_path):
+    revalidation_dir = tmp_path / "revalidation"
+    revalidation_dir.mkdir()
+    (revalidation_dir / "idea1.json").write_text(
+        json.dumps([{"id": "val_auth", "status": "flagged", "text": "x"}]), encoding="utf-8",
+    )
+    markdown = _headings_markdown({})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "validation": []}
+    result = sm._score_one_run("x", body, {"idea": "idea1", "version": "B", "repeat": 2}, "", revalidation_dir)
+
+    assert result["validation_source"] == "own"
+    assert result["flagged_ids"] == []
+
+
+def test_wording_label_old_when_saved_text_has_venue():
+    markdown = _headings_markdown({})
+    validation = [{"id": "val_missing_component", "status": "ok", "text": "a source of the venue data?"}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "validation": validation}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["wording"] == "old"
+
+
+def test_wording_label_neutral_when_no_venue_mention():
+    markdown = _headings_markdown({})
+    validation = [{"id": "val_missing_component", "status": "ok", "text": "a data source or storage component?"}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "validation": validation}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["wording"] == "neutral"
+
+
 def test_decision_adherence_is_n_a_for_version_a():
     markdown = _headings_markdown({})
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": None}
@@ -526,6 +612,57 @@ def test_consistency_is_full_fraction_when_tech_choices_identical(_env):
     data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir)
 
     assert data["consistency"][("idea1", "A")] == 1.0
+
+
+def _b_meta() -> dict:
+    return {"decision_model": "x", "validation_model": "x", "validation_input_tokens": 1, "validation_status": "flagged"}
+
+
+def test_repeatability_is_n_a_with_only_one_b_repeat(_env):
+    ideas_dir, runs_dir = _env
+    body = {
+        "design_markdown": _headings_markdown({}), "design_warnings": [], "requirements": {}, "meta": _b_meta(),
+        "decisions": [{"id": "api_style", "status": "accepted", "choice": "REST", "probability": 0.8}],
+        "validation": [],
+    }
+    _write_run(runs_dir, "idea1__B__r1", {"idea": "idea1", "version": "B", "repeat": 1}, body)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
+
+    assert data["repeatability"]["idea1"] == "n/a"
+
+
+def test_repeatability_table_reports_match_and_mismatch_across_repeats(_env):
+    ideas_dir, runs_dir = _env
+    decisions_r1 = [
+        {"id": "api_style", "status": "accepted", "choice": "REST", "probability": 0.8},
+        {"id": "primary_database", "status": "accepted", "choice": "PostgreSQL", "probability": 0.7},
+    ]
+    decisions_r2 = [
+        {"id": "api_style", "status": "accepted", "choice": "REST", "probability": 0.9},
+        {"id": "primary_database", "status": "accepted", "choice": "MongoDB", "probability": 0.6},
+    ]
+    body_1 = {
+        "design_markdown": _headings_markdown({}), "design_warnings": [], "requirements": {}, "meta": _b_meta(),
+        "decisions": decisions_r1, "validation": [],
+    }
+    body_2 = {**body_1, "decisions": decisions_r2}
+    _write_run(runs_dir, "idea1__B__r1", {"idea": "idea1", "version": "B", "repeat": 1}, body_1)
+    _write_run(runs_dir, "idea1__B__r2", {"idea": "idea1", "version": "B", "repeat": 2}, body_2)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
+    rep = data["repeatability"]["idea1"]
+
+    by_id = {row["id"]: row for row in rep["rows"]}
+    assert by_id["api_style"]["match"] is True
+    assert by_id["primary_database"]["match"] is False
+    assert rep["agreement"] == 0.5
+    assert rep["mean_abs_diff"] == pytest.approx(0.1)
+
+    report = sm.render_report(data)
+    assert "## Jev decision repeatability" in report
+    assert "api_style" in report
+    assert report.isascii()
 
 
 def test_render_report_is_ascii_and_lists_ignored(_env):

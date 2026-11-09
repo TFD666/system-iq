@@ -18,6 +18,7 @@ HERE = Path(__file__).parent
 RUNS_DIR = HERE / "runs"
 DEFAULT_IDEAS_DIR = HERE.parent / "ideas"
 REPORT_PATH = HERE / "report.md"
+REVALIDATION_DIR = HERE / "revalidation"
 
 FALLBACK_LINE = "This section could not be generated."
 
@@ -132,6 +133,29 @@ def _read_json_bom(path: Path) -> dict:
 
 def _read_text_bom(path: Path) -> str:
     return path.read_bytes().decode("utf-8-sig")
+
+
+def _read_revalidation(idea: str, revalidation_dir: Path) -> list | None:
+    """eval/m6/revalidation/<idea>.json's validation results, if the file
+    exists -- either a bare list (same shape as body["validation"]) or a
+    dict with a "validation" key. None when there is no such file."""
+    path = revalidation_dir / f"{idea}.json"
+    if not path.exists():
+        return None
+    data = _read_json_bom(path)
+    if isinstance(data, dict):
+        return data.get("validation") or []
+    return data
+
+
+def _wording_label(validation: list) -> str:
+    """"old" when the saved val_missing_component question text still has
+    the bar-specific "venue" example; "neutral" otherwise (including when
+    val_missing_component isn't present at all)."""
+    for v in validation:
+        if v.get("id") == "val_missing_component":
+            return "old" if "venue" in (v.get("text") or "").lower() else "neutral"
+    return "neutral"
 
 
 def _is_real_run(version: str, meta: dict) -> bool:
@@ -449,31 +473,49 @@ def _tech_choices(markdown: str) -> tuple[dict, dict, dict, dict]:
     return choices, counts_by_category, scope_by_category, ignored_by_category
 
 
-def _decision_adherence(decisions: list | None, markdown: str) -> tuple[float | str, float | str]:
-    """Returns (adherence, adherence_in_designated_section). Both are
-    computed over sections 1-12 only -- section 13 is code-generated from
-    the decisions and would pass by construction."""
+def _choice_has_unnegated_mention(choice: str, text: str) -> bool:
+    """True when `choice` appears at least once in `text` in a sentence
+    that has none of the negation words (see _NEGATION_PHRASES)."""
+    return any(
+        not _is_negated_mention(text, m.start())
+        for m in re.finditer(re.escape(choice), text, re.IGNORECASE)
+    )
+
+
+def _decision_adherence(decisions: list | None, markdown: str) -> tuple[float | str, float | str, float | str]:
+    """Returns (adherence, adherence_strict, adherence_in_designated_section).
+    All three are computed over sections 1-12 only -- section 13 is
+    code-generated from the decisions and would pass by construction.
+    `adherence` is the main number (plain substring match, no negation
+    filter); `adherence_strict` additionally requires an unnegated mention."""
     if not decisions:
-        return "n/a", "n/a"
+        return "n/a", "n/a", "n/a"
     accepted = [d for d in decisions if d.get("status") == "accepted" and d.get("choice")]
     if not accepted:
-        return "n/a", "n/a"
+        return "n/a", "n/a", "n/a"
 
-    sections_1_12 = _sections_1_12_text(markdown).lower()
-    hits = sum(1 for d in accepted if d["choice"].lower() in sections_1_12)
+    sections_1_12_text = _sections_1_12_text(markdown)
+    sections_1_12_lower = sections_1_12_text.lower()
+    hits = sum(1 for d in accepted if d["choice"].lower() in sections_1_12_lower)
     adherence = hits / len(accepted)
+
+    strict_hits = sum(1 for d in accepted if _choice_has_unnegated_mention(d["choice"], sections_1_12_text))
+    adherence_strict = strict_hits / len(accepted)
 
     designated = [d for d in accepted if d["id"] in _DECISION_DESIGNATED_SECTIONS]
     if not designated:
-        return adherence, "n/a"
+        return adherence, adherence_strict, "n/a"
     designated_hits = sum(
         1 for d in designated
         if d["choice"].lower() in _section_numbers_text(markdown, _DECISION_DESIGNATED_SECTIONS[d["id"]]).lower()
     )
-    return adherence, designated_hits / len(designated)
+    return adherence, adherence_strict, designated_hits / len(designated)
 
 
-def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> dict:
+def _score_one_run(
+    run_id: str, body: dict, meta_info: dict, idea_text: str,
+    revalidation_dir: Path = REVALIDATION_DIR,
+) -> dict:
     version = meta_info["version"]
     markdown = body.get("design_markdown") or ""
     meta = body.get("meta") or {}
@@ -510,23 +552,37 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
     retry_reason_counts = _retry_reason_counts(group_stats)
 
     if version == "B":
-        decision_adherence, decision_adherence_in_designated_section = _decision_adherence(
-            body.get("decisions"), markdown,
+        decision_adherence, decision_adherence_strict, decision_adherence_in_designated_section = (
+            _decision_adherence(body.get("decisions"), markdown)
         )
         jev_requests = 1 + (meta.get("validation_calls") or 0)
         jev_input_tokens = (meta.get("input_tokens") or 0) + (meta.get("validation_input_tokens") or 0)
         jev_output_tokens = (meta.get("output_tokens") or 0) + (meta.get("validation_output_tokens") or 0)
-        validation = body.get("validation") or []
+
+        own_validation = body.get("validation") or []
+        wording = _wording_label(own_validation)
+
+        validation = own_validation
+        validation_source = "own"
+        if meta_info.get("repeat") == 1:
+            override = _read_revalidation(meta_info["idea"], revalidation_dir)
+            if override is not None:
+                validation = override
+                validation_source = "revalidated"
+
         flagged_ids = [v["id"] for v in validation if v.get("status") == "flagged"]
         possible_ids = [v["id"] for v in validation if v.get("status") == "possible"]
     else:
         decision_adherence = "n/a"
+        decision_adherence_strict = "n/a"
         decision_adherence_in_designated_section = "n/a"
         jev_requests = 0
         jev_input_tokens = 0
         jev_output_tokens = 0
         flagged_ids = []
         possible_ids = []
+        validation_source = "n/a"
+        wording = "n/a"
 
     return {
         "run_id": run_id,
@@ -539,6 +595,7 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
         "placeholder_hits": placeholder_hits,
         "jargon_hits": jargon_hits,
         "decision_adherence": decision_adherence,
+        "decision_adherence_strict": decision_adherence_strict,
         "decision_adherence_in_designated_section": decision_adherence_in_designated_section,
         "tech_choices": tech_choices,
         "tech_counts": tech_counts,
@@ -561,6 +618,10 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
         "possible_ids": possible_ids,
         "flagged_count": len(flagged_ids),
         "possible_count": len(possible_ids),
+        "non_ok_ids": flagged_ids + possible_ids,
+        "validation_source": validation_source,
+        "wording": wording,
+        "decisions": body.get("decisions") if version == "B" else None,
     }
 
 
@@ -578,7 +639,55 @@ def _mean(values: list) -> float | str:
     return sum(values) / len(values) if values else "n/a"
 
 
-def score(ideas_dir: Path = DEFAULT_IDEAS_DIR, runs_dir: Path = RUNS_DIR) -> dict:
+def _decision_repeatability(b_runs: list[dict]) -> dict | str:
+    """
+    For an idea's B runs (repeat >= 2 required -- "n/a" otherwise): per
+    accepted decision id, the choice and probability from each repeat
+    that accepted it, whether all those choices match, and the spread
+    (max - min) of their probabilities. Plus a summary: fraction of
+    decision ids where every repeat agreed, and the mean probability
+    spread across decision ids.
+    """
+    if len(b_runs) < 2:
+        return "n/a"
+
+    by_decision: dict[str, dict[int, tuple[str, float]]] = {}
+    for r in b_runs:
+        for d in (r.get("decisions") or []):
+            if d.get("status") == "accepted" and d.get("choice") and d.get("probability") is not None:
+                by_decision.setdefault(d["id"], {})[r["repeat"]] = (d["choice"], d["probability"])
+
+    rows = []
+    agree_count = 0
+    abs_diffs = []
+    for decision_id, by_repeat in sorted(by_decision.items()):
+        repeats = sorted(by_repeat)
+        choices = [by_repeat[rep][0] for rep in repeats]
+        probabilities = [by_repeat[rep][1] for rep in repeats]
+        match = len(set(choices)) == 1
+        abs_diff = max(probabilities) - min(probabilities) if len(probabilities) > 1 else 0.0
+        rows.append({
+            "id": decision_id, "repeats": repeats, "choices": choices,
+            "probabilities": probabilities, "match": match, "abs_diff": abs_diff,
+        })
+        if match:
+            agree_count += 1
+        abs_diffs.append(abs_diff)
+
+    if not rows:
+        return "n/a"
+
+    return {
+        "rows": rows,
+        "agreement": agree_count / len(rows),
+        "mean_abs_diff": sum(abs_diffs) / len(abs_diffs),
+    }
+
+
+def score(
+    ideas_dir: Path = DEFAULT_IDEAS_DIR, runs_dir: Path = RUNS_DIR,
+    revalidation_dir: Path = REVALIDATION_DIR,
+) -> dict:
     meta_paths = sorted(runs_dir.glob("*.meta.json"))
     runs: list[dict] = []
     ignored: list[str] = []
@@ -595,7 +704,7 @@ def score(ideas_dir: Path = DEFAULT_IDEAS_DIR, runs_dir: Path = RUNS_DIR) -> dic
             continue
         idea_path = ideas_dir / f"{meta_info['idea']}.md"
         idea_text = _read_text_bom(idea_path) if idea_path.exists() else ""
-        runs.append(_score_one_run(run_id, body, meta_info, idea_text))
+        runs.append(_score_one_run(run_id, body, meta_info, idea_text, revalidation_dir))
 
     by_idea_version: dict[tuple, list[dict]] = {}
     for r in runs:
@@ -609,6 +718,11 @@ def score(ideas_dir: Path = DEFAULT_IDEAS_DIR, runs_dir: Path = RUNS_DIR) -> dic
             aggregate[version][key] = _mean([r[key] for r in version_runs])
         adherence_values = [r["decision_adherence"] for r in version_runs if isinstance(r["decision_adherence"], (int, float))]
         aggregate[version]["decision_adherence"] = _mean(adherence_values) if adherence_values else "n/a"
+        strict_values = [
+            r["decision_adherence_strict"] for r in version_runs
+            if isinstance(r["decision_adherence_strict"], (int, float))
+        ]
+        aggregate[version]["decision_adherence_strict"] = _mean(strict_values) if strict_values else "n/a"
         designated_values = [
             r["decision_adherence_in_designated_section"] for r in version_runs
             if isinstance(r["decision_adherence_in_designated_section"], (int, float))
@@ -637,11 +751,17 @@ def score(ideas_dir: Path = DEFAULT_IDEAS_DIR, runs_dir: Path = RUNS_DIR) -> dic
 
     ideas = sorted({r["idea"] for r in runs})
 
+    repeatability = {
+        idea: _decision_repeatability(by_idea_version.get((idea, "B"), []))
+        for idea in ideas
+    }
+
     return {
         "runs": runs,
         "ignored": ignored,
         "ideas": ideas,
         "by_idea_version": by_idea_version,
+        "repeatability": repeatability,
         "aggregate": aggregate,
         "consistency": consistency,
     }
@@ -676,9 +796,10 @@ def render_report(data: dict) -> str:
         lines.append("")
         lines.append("| version | repeat | sections_found | fallback_lines | warnings | "
                       "placeholder_hits | jargon_hits | leak_hits | retries | decision_adherence | "
-                      "numeric_claims | unsupported_numbers | assumption_mentions | tech_choices (scope) | "
-                      "tech_counts | tech_ignored | jev_requests |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+                      "decision_adherence_strict | numeric_claims | unsupported_numbers | assumption_mentions | "
+                      "tech_choices (scope) | tech_counts | tech_ignored | jev_requests | non_ok_ids (source) | "
+                      "wording |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for version in ("A", "B"):
             for r in data["by_idea_version"].get((idea, version), []):
                 scope_abbrev = {"designated": "d", "fallback (1-12)": "f"}
@@ -694,12 +815,16 @@ def render_report(data: dict) -> str:
                     ",".join(f"{term}={c}" for term, c in ignored.items() if c > 0) or "-"
                     for ignored in r["tech_ignored"].values()
                 )
+                non_ok = ",".join(r["non_ok_ids"]) or "-"
+                non_ok_str = f"{non_ok} ({r['validation_source']})" if r["validation_source"] != "n/a" else non_ok
                 lines.append(
                     f"| {r['version']} | {r['repeat']} | {r['sections_found']} | {r['fallback_lines']} | "
                     f"{r['design_warnings']} | {r['placeholder_hits']} | {r['jargon_hits']} | "
                     f"{r['leak_hits']} | {r['retries']} | {_fmt(r['decision_adherence'])} | "
+                    f"{_fmt(r['decision_adherence_strict'])} | "
                     f"{r['numeric_claims']} | {r['unsupported_numbers']} | {r['assumption_mentions']} | "
-                    f"{tech} | {tech_counts} | {tech_ignored} | {r['jev_requests']} |"
+                    f"{tech} | {tech_counts} | {tech_ignored} | {r['jev_requests']} | {non_ok_str} | "
+                    f"{r['wording']} |"
                 )
         lines.append("")
 
@@ -714,6 +839,10 @@ def render_report(data: dict) -> str:
         lines.append(f"| {key} | {a_val} | {b_val} |")
     lines.append(
         f"| decision_adherence | n/a | {_fmt(data['aggregate']['B'].get('decision_adherence', 'n/a'))} |"
+    )
+    lines.append(
+        f"| decision_adherence_strict | n/a | "
+        f"{_fmt(data['aggregate']['B'].get('decision_adherence_strict', 'n/a'))} |"
     )
     lines.append(
         f"| decision_adherence_in_designated_section | n/a | "
@@ -764,6 +893,27 @@ def render_report(data: dict) -> str:
         lines.append(f"| {idea} | {version} | {_fmt(value)} |")
     lines.append("")
 
+    lines.append("## Jev decision repeatability (idea, >=2 B repeats)")
+    lines.append("")
+    for idea in data["ideas"]:
+        rep = data["repeatability"].get(idea, "n/a")
+        lines.append(f"### {idea}")
+        lines.append("")
+        if rep == "n/a":
+            lines.append("n/a")
+            lines.append("")
+            continue
+        lines.append("| decision_id | choices (by repeat) | probabilities (by repeat) | match | abs_prob_diff |")
+        lines.append("|---|---|---|---|---|")
+        for row in rep["rows"]:
+            choices_str = ",".join(row["choices"])
+            probs_str = ",".join(f"{p:.2f}" for p in row["probabilities"])
+            lines.append(f"| {row['id']} | {choices_str} | {probs_str} | {row['match']} | {row['abs_diff']:.2f} |")
+        lines.append(
+            f"agreement={_fmt(rep['agreement'])} mean_abs_prob_diff={_fmt(rep['mean_abs_diff'])}"
+        )
+        lines.append("")
+
     lines.append("## Limitations")
     lines.append("")
     lines.append("- n is tiny (a handful of ideas, a handful of repeats each).")
@@ -771,6 +921,8 @@ def render_report(data: dict) -> str:
     lines.append("- Both versions use free-tier models behind one LLM and one decision provider.")
     lines.append("- This says how these two modes behaved on these specific ideas, not a general claim "
                   "about llm-only vs pipeline design quality.")
+    lines.append("- Validation wording changed during the evaluation; revalidated results use the "
+                  "neutral wording.")
     lines.append("")
 
     return "\n".join(lines)

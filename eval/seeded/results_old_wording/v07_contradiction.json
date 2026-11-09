@@ -1,0 +1,261 @@
+{
+  "stage": "validated",
+  "requirements": {
+    "project_summary": "A mobile application to help users locate nearby bars.",
+    "app_type": null,
+    "core_features": [
+      "View nearby bars",
+      "Location-based display"
+    ],
+    "user_roles": [
+      "End user"
+    ],
+    "expected_scale": {
+      "users": null,
+      "peak_requests_per_second": null,
+      "data_volume": null
+    },
+    "realtime": null,
+    "geospatial": true,
+    "authentication": null,
+    "search_filtering": null,
+    "media_storage": null,
+    "payments": null,
+    "offline_support": null,
+    "external_integrations": [
+      "map provider"
+    ],
+    "constraints": [],
+    "assumptions": [
+      "Users need device location permissions to find nearby venues."
+    ],
+    "unknowns": [
+      "app_type not specified",
+      "realtime not specified",
+      "authentication not specified",
+      "search_filtering not specified",
+      "media_storage not specified",
+      "payments not specified",
+      "offline_support not specified",
+      "expected scale not specified",
+      "Whether the app includes business details like hours or ratings."
+    ],
+    "evidence": {
+      "geospatial": "nearby bars"
+    }
+  },
+  "decisions": [
+    {
+      "id": "api_style",
+      "question": "Which API communication style best fits this project's needs?",
+      "status": "accepted",
+      "choice": "REST",
+      "probability": 1.0,
+      "top_alternatives": [
+        {
+          "option": "REST",
+          "probability": 1.0
+        },
+        {
+          "option": "GraphQL",
+          "probability": 0.0
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "primary_database",
+      "question": "Which database best suits the data storage needs of this project?",
+      "status": "accepted",
+      "choice": "PostgreSQL + PostGIS",
+      "probability": 0.95,
+      "top_alternatives": [
+        {
+          "option": "PostgreSQL + PostGIS",
+          "probability": 0.95
+        },
+        {
+          "option": "MongoDB",
+          "probability": 0.04
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "architecture_style",
+      "question": "Which architecture style is most appropriate for this project's scale?",
+      "status": "accepted",
+      "choice": "monolith",
+      "probability": 0.93,
+      "top_alternatives": [
+        {
+          "option": "monolith",
+          "probability": 0.93
+        },
+        {
+          "option": "modular monolith",
+          "probability": 0.07
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "cache_needed",
+      "question": "Does this project need a caching layer to meet its performance requirements?",
+      "status": "uncertain",
+      "choice": null,
+      "probability": 0.39,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "async_processing_needed",
+      "question": "Does this project need asynchronous or background job processing?",
+      "status": "no",
+      "choice": null,
+      "probability": 0.22,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "horizontal_scaling_needed",
+      "question": "Does this project need horizontal scaling to handle its expected load?",
+      "status": "no",
+      "choice": null,
+      "probability": 0.23,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "auth_approach",
+      "question": "Which authentication approach is most appropriate for this project?",
+      "status": "tentative",
+      "choice": "third-party login",
+      "probability": 0.65,
+      "top_alternatives": [
+        {
+          "option": "third-party login",
+          "probability": 0.65
+        },
+        {
+          "option": "JWT",
+          "probability": 0.32
+        }
+      ],
+      "based_on_unknowns": true
+    }
+  ],
+  "meta": {
+    "decision_model": "n/a (validation only)",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "decision_billing": null,
+    "decision_cost": null,
+    "llm_model": null,
+    "design_prompt_tokens": null,
+    "design_completion_tokens": null,
+    "design_group_stats": null,
+    "validation_calls": 1,
+    "validation_input_tokens": 1566,
+    "validation_output_tokens": 209,
+    "validation_status": "flagged",
+    "validation_model": "jev-1.13-free"
+  },
+  "design_markdown": "## 1. Architecture overview\n\nThe system uses a monolith architecture: a single deployable service handles API requests, business logic, and data access. This fits the project's current scale, since the expected request volume and user count are not yet specified. A monolith keeps deployment and operations simple while the project is small.\n\n## 2. Components and responsibilities\n\n- **API layer**: receives HTTP requests and routes them to the right handler.\n- **Venue data source**: a venue directory imported as a dataset that feeds the nearby-bars search.\n- **Map provider**: a generic map provider renders nearby bars on a map and provides geocoding.\n- **Search service**: finds and ranks nearby venues using the user's location.\n\n## 3. Data flow\n\nA client sends its current location to the API layer. The API layer asks the search service for nearby venues, which queries the database using the stored venue coordinates. Results are returned to the client as a list of nearby bars.\n\n## 4. API architecture\n\nThe API uses a RESTful style, with endpoints for listing venues near the user's location and fetching venue details. REST was chosen because the client's needs are simple request/response pairs; no streaming or real-time behavior is required.\n\n## 5. Database architecture and data model\n\nThe primary database is PostgreSQL with the PostGIS extension, which supports geospatial queries so nearby venues can be found efficiently by distance. The main entity is Venue, storing a name, a location, and a category.\n\n## 6. Authentication\n\nThis project does not require user accounts or sign-in; nearby-venue search is available without authentication. If needed later, a third-party login (such as a social login) could be added.\n\n## 7. Caching\n\nCaching for nearby-venue lookups is not yet decided; whether a caching layer is needed depends on expected traffic, which is currently unspecified.\n\n## 8. External services\n\n- **Map provider**: a generic external map provider supplies maps and geocoding.\n- **Venue directory**: an imported dataset of venue listings, synced periodically from an external venue directory service.\n\n## 9. Security considerations\n\nSince there is no authentication, the main risk is abuse of the public nearby-search endpoint. Basic rate limiting and input validation on location coordinates reduce this risk.\n\n## 10. Scaling\n\nThe system does not currently require horizontal scaling across multiple servers; expected load is modest and a single well-sized instance should suffice. If load grows, the first step would be a larger instance (vertical scaling) rather than adding more servers.\n\nHorizontal scaling across many servers is required.\n\n## 11. Failure handling\n\nIf the database is temporarily unavailable, the API returns a clear error to the client rather than a partial result. If the map provider is unavailable, nearby-venue data can still be shown without the map.\n\n## 12. Trade-offs and rationale\n\nA monolith was chosen over microservices to keep the system simple while the scale is unspecified. REST was chosen over GraphQL for its simplicity given the small, fixed set of endpoints needed.\n\n## 13. Assumptions and open questions\n\n- Expected scale (users, requests per second, data volume) is not specified.\n- Whether the app includes business details like hours or ratings is unknown.\n",
+  "design_warnings": [
+    "validation: val_invented",
+    "validation: val_contradiction",
+    "validation: val_incoherent"
+  ],
+  "validation": [
+    {
+      "id": "val_geospatial",
+      "text": "Does the design explain how nearby, location-based queries are supported, for example with a spatial index or a geospatial database?",
+      "probability": 0.97,
+      "status": "ok",
+      "sections": [
+        4,
+        5
+      ]
+    },
+    {
+      "id": "val_decision_api_style",
+      "text": "Does the design clearly use REST for API style?",
+      "probability": 0.99,
+      "status": "ok",
+      "sections": [
+        4
+      ]
+    },
+    {
+      "id": "val_decision_primary_database",
+      "text": "Does the design clearly use PostgreSQL + PostGIS for Primary database?",
+      "probability": 0.99,
+      "status": "ok",
+      "sections": [
+        5
+      ]
+    },
+    {
+      "id": "val_decision_architecture_style",
+      "text": "Does the design clearly use monolith for Architecture style?",
+      "probability": 0.98,
+      "status": "ok",
+      "sections": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "val_missing_component",
+      "text": "Is any component that these requirements need missing from the design, for example a source of the venue data?",
+      "probability": 0.28,
+      "status": "ok",
+      "sections": [
+        2,
+        8
+      ]
+    },
+    {
+      "id": "val_invented",
+      "text": "Does the design present features or requirements that are not in the requirements, for example reviews, ratings or user accounts?",
+      "probability": 0.41,
+      "status": "possible",
+      "sections": [
+        2,
+        5
+      ]
+    },
+    {
+      "id": "val_contradiction",
+      "text": "Do any two sections of the design contradict each other?",
+      "probability": 0.91,
+      "status": "flagged",
+      "sections": []
+    },
+    {
+      "id": "val_unneeded_complexity",
+      "text": "Is the design more complex than these requirements need?",
+      "probability": 0.28,
+      "status": "ok",
+      "sections": []
+    },
+    {
+      "id": "val_scale_overclaim",
+      "text": "Does the design claim it can handle a specific load or scale that the requirements do not state?",
+      "probability": 0.32,
+      "status": "ok",
+      "sections": [
+        10
+      ]
+    },
+    {
+      "id": "val_incoherent",
+      "text": "Does any section of the design contain unclear, nonsensical or meaningless text?",
+      "probability": 0.84,
+      "status": "flagged",
+      "sections": []
+    }
+  ],
+  "revisions": []
+}

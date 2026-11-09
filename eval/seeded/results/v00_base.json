@@ -156,7 +156,7 @@
     "design_completion_tokens": null,
     "design_group_stats": null,
     "validation_calls": 1,
-    "validation_input_tokens": 1553,
+    "validation_input_tokens": 1565,
     "validation_output_tokens": 209,
     "validation_status": "passed",
     "validation_model": "jev-1.13-free"
@@ -206,8 +206,8 @@
     },
     {
       "id": "val_missing_component",
-      "text": "Is any component that these requirements need missing from the design, for example a source of the venue data?",
-      "probability": 0.27,
+      "text": "Is any component that these requirements need missing from the design, for example a data source, a storage component, a notification service or an external integration?",
+      "probability": 0.3,
       "status": "ok",
       "sections": [
         2,
@@ -216,8 +216,8 @@
     },
     {
       "id": "val_invented",
-      "text": "Does the design present features or requirements that are not in the requirements, for example reviews, ratings or user accounts?",
-      "probability": 0.33,
+      "text": "Does the design present features or requirements that are not in the requirements, for example extra user roles, accounts, ratings or payments?",
+      "probability": 0.3,
       "status": "ok",
       "sections": [
         2,
@@ -234,14 +234,14 @@
     {
       "id": "val_unneeded_complexity",
       "text": "Is the design more complex than these requirements need?",
-      "probability": 0.25,
+      "probability": 0.26,
       "status": "ok",
       "sections": []
     },
     {
       "id": "val_scale_overclaim",
       "text": "Does the design claim it can handle a specific load or scale that the requirements do not state?",
-      "probability": 0.15,
+      "probability": 0.14,
       "status": "ok",
       "sections": [
         10
