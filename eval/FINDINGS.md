@@ -68,3 +68,57 @@ contradiction and incoherence flags can be revised.
 ## Reproduce
 Raw runs are in `eval/m6/runs`, validation checks in `eval/seeded`, ratings in `eval/m6/blind`, the full
 tables in `eval/m6/report.md`.
+## Round 2: B2 (confident writer), tested as pre-registered in PREREGISTRATION_B2.md
+B2 = the same Jev decisions and validation as B, but written in the same confident-architect voice as A, with
+the decisions given as fixed directives. Uncertainty stays visible only in section 13 (hidden from raters).
+
+| | A | B | B2 |
+|---|---|---|---|
+| specific | 4.83 | 3.17 | 4.67 |
+| correct | 3.50 | 3.00 | 3.33 |
+| useful | 4.33 | 3.17 | 4.33 |
+| clear | 4.67 | 3.83 | 4.67 |
+| overall mean | 4.33 | 3.29 | 4.25 |
+Hedging phrases per design: A 0.56, B 8.89, B2 0.33. Design input tokens: A 3,144, B 6,005, B2 3,430.
+
+Pre-registered rule: B2 better only if its overall mean exceeds A's by 0.30, it wins at least 4 of 6 ideas, and
+its "correct" mean is not lower. Result: overall difference -0.08, wins B2 3 / A 2 / tie 1, "correct" 3.33 vs 3.50.
+**No clear difference between B2 and A.**
+
+What it shows: most of the round-1 gap between A and B came from writing voice. With voice matched, the
+Jev-informed design is rated about the same as the LLM-only design, not better. The pipeline adds repeatable
+decisions, a validation report and a confidence-labelled section 13, for 2 extra Jev requests and about 9% more
+input tokens.
+
+Exploratory (not pre-registered): sensor_dashboard is the only large gap (A 4.75, B2 3.25), the idea where Jev was
+least confident. Without it B2 leads by 0.20, still below the pre-registered bar.
+
+Caveats: one rater who built the system, 6 ideas, one run per arm, scores cluster at 4 and 5, absolute ratings
+differ between round 1 and round 2 (rater drift).
+## Round 2: B2 (confident writer), tested as pre-registered in PREREGISTRATION_B2.md
+B2 = the same Jev decisions and validation as B, but written in the same confident-architect voice as A, with
+the decisions given as fixed directives. Uncertainty stays visible only in section 13 (hidden from raters).
+
+| | A | B | B2 |
+|---|---|---|---|
+| specific | 4.83 | 3.17 | 4.67 |
+| correct | 3.50 | 3.00 | 3.33 |
+| useful | 4.33 | 3.17 | 4.33 |
+| clear | 4.67 | 3.83 | 4.67 |
+| overall mean | 4.33 | 3.29 | 4.25 |
+Hedging phrases per design: A 0.56, B 8.89, B2 0.33. Design input tokens: A 3,144, B 6,005, B2 3,430.
+
+Pre-registered rule: B2 better only if its overall mean exceeds A's by 0.30, it wins at least 4 of 6 ideas, and
+its "correct" mean is not lower. Result: overall difference -0.08, wins B2 3 / A 2 / tie 1, "correct" 3.33 vs 3.50.
+**No clear difference between B2 and A.**
+
+What it shows: most of the round-1 gap between A and B came from writing voice. With voice matched, the
+Jev-informed design is rated about the same as the LLM-only design, not better. The pipeline adds repeatable
+decisions, a validation report and a confidence-labelled section 13, for 2 extra Jev requests and about 9% more
+input tokens.
+
+Exploratory (not pre-registered): sensor_dashboard is the only large gap (A 4.75, B2 3.25), the idea where Jev was
+least confident. Without it B2 leads by 0.20, still below the pre-registered bar.
+
+Caveats: one rater who built the system, 6 ideas, one run per arm, scores cluster at 4 and 5, absolute ratings
+differ between round 1 and round 2 (rater drift).

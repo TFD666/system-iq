@@ -1,0 +1,246 @@
+{
+  "stage": "validated",
+  "requirements": {
+    "project_summary": "A mobile to-do application supporting offline usage, cross-device synchronization, and the ability for users to share lists with family members, targeting an initial user base of 10,000.",
+    "app_type": null,
+    "core_features": [
+      "Offline data storage and access",
+      "Cross-device synchronization when online",
+      "Sharing to-do lists with other users"
+    ],
+    "user_roles": [
+      "End user"
+    ],
+    "expected_scale": {
+      "users": "10,000",
+      "peak_requests_per_second": null,
+      "data_volume": null
+    },
+    "realtime": null,
+    "geospatial": null,
+    "authentication": null,
+    "search_filtering": null,
+    "media_storage": null,
+    "payments": null,
+    "offline_support": true,
+    "external_integrations": [],
+    "constraints": [],
+    "assumptions": [
+      "User accounts are required to manage device synchronization and list sharing",
+      "Family members refer to other registered users within the application system"
+    ],
+    "unknowns": [
+      "app_type not specified",
+      "realtime not specified",
+      "geospatial not specified",
+      "authentication not specified",
+      "search_filtering not specified",
+      "media_storage not specified",
+      "payments not specified"
+    ],
+    "evidence": {
+      "offline_support": "works offline on phones"
+    }
+  },
+  "decisions": [
+    {
+      "id": "api_style",
+      "question": "Which API communication style best fits this project's needs?",
+      "status": "accepted",
+      "choice": "REST",
+      "probability": 0.99,
+      "top_alternatives": [
+        {
+          "option": "REST",
+          "probability": 0.99
+        },
+        {
+          "option": "GraphQL",
+          "probability": 0.01
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "primary_database",
+      "question": "Which database best suits the data storage needs of this project?",
+      "status": "needs_review",
+      "choice": "MongoDB",
+      "probability": 0.45,
+      "top_alternatives": [
+        {
+          "option": "PostgreSQL",
+          "probability": 0.45
+        },
+        {
+          "option": "MongoDB",
+          "probability": 0.45
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "architecture_style",
+      "question": "Which architecture style is most appropriate for this project's scale?",
+      "status": "tentative",
+      "choice": "monolith",
+      "probability": 0.58,
+      "top_alternatives": [
+        {
+          "option": "monolith",
+          "probability": 0.58
+        },
+        {
+          "option": "modular monolith",
+          "probability": 0.42
+        }
+      ],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "cache_needed",
+      "question": "Does this project need a caching layer to meet its performance requirements?",
+      "status": "uncertain",
+      "choice": null,
+      "probability": 0.28,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "async_processing_needed",
+      "question": "Does this project need asynchronous or background job processing?",
+      "status": "yes",
+      "choice": null,
+      "probability": 0.76,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "horizontal_scaling_needed",
+      "question": "Does this project need horizontal scaling to handle its expected load?",
+      "status": "no",
+      "choice": null,
+      "probability": 0.21,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    }
+  ],
+  "meta": {
+    "decision_model": "jev-1.13-free",
+    "input_tokens": 764,
+    "output_tokens": 186,
+    "decision_billing": "free",
+    "decision_cost": 0.0,
+    "llm_model": "qwen/qwen3.8-27b",
+    "design_prompt_tokens": 3402,
+    "design_completion_tokens": 1177,
+    "design_group_stats": [
+      {
+        "id": "g1",
+        "prompt_tokens": 848,
+        "completion_tokens": 310,
+        "retries": 0,
+        "elapsed_seconds": 1.14,
+        "retry_reasons": []
+      },
+      {
+        "id": "g2",
+        "prompt_tokens": 819,
+        "completion_tokens": 268,
+        "retries": 0,
+        "elapsed_seconds": 60.954,
+        "retry_reasons": []
+      },
+      {
+        "id": "g3",
+        "prompt_tokens": 887,
+        "completion_tokens": 281,
+        "retries": 0,
+        "elapsed_seconds": 60.906,
+        "retry_reasons": []
+      },
+      {
+        "id": "g4",
+        "prompt_tokens": 848,
+        "completion_tokens": 318,
+        "retries": 0,
+        "elapsed_seconds": 61.125,
+        "retry_reasons": []
+      }
+    ],
+    "validation_calls": 1,
+    "validation_input_tokens": 2165,
+    "validation_output_tokens": 145,
+    "validation_status": "flagged",
+    "validation_model": "jev-1.13-free",
+    "writer_style": "confident"
+  },
+  "design_markdown": "## 1. Architecture overview\nA monolithic architecture is adopted for this project. This style provides operational simplicity for a system serving 10,000 users without the overhead of distributed systems. The single deployable unit encompasses all business logic, data access, and API endpoints. This design effectively supports offline-first capabilities and cross-device synchronization. The system relies on asynchronous processing to handle collaborative tasks. No additional caching layers are introduced to maintain a straightforward deployment footprint. Horizontal scaling is not required to meet the specified usage volume.\n\n## 2. Components and responsibilities\n- **API Gateway:** Manages RESTful endpoints for authentication, data retrieval, and synchronization requests.\n- **Core Business Logic:** Handles to-do list creation, editing, and sharing policies between registered users.\n- **Data Access Layer:** Interfaces with the PostgreSQL database to persist user accounts and list states.\n- **Synchronization Engine:** Reconciles local device data with server-side records upon connectivity.\n- **Async Worker:** Processes background tasks for list sharing notifications and state propagation.\n\n## 3. Data flow\nThe client application initiates a REST request to the API Gateway for synchronization. The gateway authenticates the user and forwards the payload to the Core Business Logic. Data is fetched from PostgreSQL to compare local and remote states. Write operations are persisted to the database immediately. Share requests trigger the Async Worker to process recipient updates. The final state is serialized and returned to the client for offline storage. No external caches or integrations influence this cycle.\n\n## 4. API architecture\nREST fits this system because stateless JSON endpoints simplify the client application\u2019s offline logic and sync workflows.\n\nMain resources include:\n- `POST /sync` to upload pending local changes\n- `GET /sync` to retrieve remote updates since the last checkpoint\n- `POST /lists` to create shared to-do lists\n- `PATCH /items/{id}` to modify individual tasks\n- `GET /lists/{id}/share` to manage access permissions for family members\n\nVersioning uses URI path prefixes, starting with `/v1/`. Error responses follow standard HTTP status codes with structured JSON bodies detailing validation failures or conflict states.\n\n## 5. Database architecture and data model\nPostgreSQL serves as the primary database, offering robust relational integrity and JSONB support for flexible task metadata.\n\nCore entities include:\n- Users: account identifiers and authentication details\n- Lists: title, visibility, and associated user IDs\n- Items: task description, status, and priority\n- ShareRequests: records of list-sharing permissions\n\nEach Item belongs to one List, which many-to-many links with Users via membership tables. The system uses unique constraints on user-list pairs to prevent duplicate entries. No partitioning is required given the moderate scale of 10,000 users.\n\n## 6. Authentication\nThe client application enforces mandatory user accounts to facilitate cross-device synchronization and list sharing. Authentication utilizes JWT-based token verification via REST endpoints, granting access exclusively to End User roles. Tokens persist for a duration sufficient to maintain seamless offline transitions, allowing the client to cache credentials before connectivity is restored.\n\n## 7. Caching\nCaching is not needed. The monolithic architecture directly queries the primary database for all read and write operations. Without specific performance bottlenecks identified regarding concurrency or latency, an additional caching layer would introduce unnecessary complexity and maintenance overhead for this scale.\n\n## 8. External services\nThe project requires zero external services or integrations. All core functionalities, including offline storage, synchronization, and sharing, are handled entirely within the internal monolithic application. Data persistence relies solely on the internal primary database, eliminating third-party dependencies for core business logic.\n\n## 9. Security considerations\n*   **Input Validation:** Implement strict schema validation on all REST endpoints to prevent injection attacks and ensure data integrity during synchronization.\n*   **Secrets Handling:** Store encryption keys and database credentials in a localized environment secret manager, never embedded in the client application or source code.\n*   **Access Control:** Enforce role-based permissions via JWT claims to ensure users can only access or modify their own to-do lists and shared family members\u2019 data.\n\n## 10. Scaling\nThe system is designed as a monolith to handle the projected load efficiently without unnecessary complexity. Since horizontal scaling is not required for this project, the application server runs as a single instance. The stateless REST API allows for straightforward vertical scaling if user activity increases. Data storage relies on a single primary database, ensuring simple maintenance and data consistency for the ten-thousand user base. This vertical-first approach minimizes infrastructure overhead and keeps operational costs low while meeting current demand projections.\n\n## 11. Failure handling\nIf the primary database becomes unavailable, the system relies on client-side offline storage to maintain data integrity. API requests will encounter standard timeout mechanisms, prompting the client application to queue synchronization tasks for later execution. There are no external dependencies to fall back on. Transient network errors trigger automatic retries with exponential backoff to recover connectivity. If a server component fails, users simply remain in offline mode until the service restores full functionality.\n\n## 12. Trade-offs and rationale\n- **Monolith over microservices**: A single codebase simplifies deployment and debugging for a team of this size.\n- **No caching layer**: With modest scale, database query performance remains sufficient, reducing infrastructure complexity.\n- **Offline-first data model**: Prioritizes local storage to ensure data availability without network access.\n- **REST over WebSockets**: Standard HTTP methods facilitate easier caching by intermediaries and simpler client implementation.\n- **No horizontal scaling**: Accepts single-node limits to avoid distributed system complexities like sharding or replication.\n\n## 13. Assumptions and open questions\n\n### Decided\n- API style: REST (confidence 99%)\n- Judged needed: Asynchronous processing\n- Judged not needed: Horizontal scaling (estimated 21% likelihood it is needed)\n\n### Proposed, to be confirmed\n- Architecture style: monolith (58%); alternative: modular monolith (42%)\n\n### Unclear\n- Primary database\n- Caching (28% estimated likelihood needed)\n\n### Depends on unspecified requirements\n- Realtime: affects Asynchronous processing\n- Geospatial: affects Primary database\n- App type: affects API style",
+  "design_warnings": [
+    "validation: val_missing_component",
+    "validation: val_invented",
+    "validation: val_contradiction"
+  ],
+  "validation": [
+    {
+      "id": "val_decision_api_style",
+      "text": "Does the design clearly use REST for API style?",
+      "probability": 0.98,
+      "status": "ok",
+      "sections": [
+        4
+      ]
+    },
+    {
+      "id": "val_missing_component",
+      "text": "Is any component that these requirements need missing from the design, for example a data source, a storage component, a notification service or an external integration?",
+      "probability": 0.44,
+      "status": "possible",
+      "sections": [
+        2,
+        8
+      ]
+    },
+    {
+      "id": "val_invented",
+      "text": "Does the design present features or requirements that are not in the requirements, for example extra user roles, accounts, ratings or payments?",
+      "probability": 0.48,
+      "status": "possible",
+      "sections": [
+        2,
+        5
+      ]
+    },
+    {
+      "id": "val_contradiction",
+      "text": "Do any two sections of the design contradict each other?",
+      "probability": 0.91,
+      "status": "flagged",
+      "sections": []
+    },
+    {
+      "id": "val_unneeded_complexity",
+      "text": "Is the design more complex than these requirements need?",
+      "probability": 0.26,
+      "status": "ok",
+      "sections": []
+    },
+    {
+      "id": "val_scale_overclaim",
+      "text": "Does the design claim it can handle a specific load or scale that the requirements do not state?",
+      "probability": 0.25,
+      "status": "ok",
+      "sections": [
+        10
+      ]
+    },
+    {
+      "id": "val_incoherent",
+      "text": "Does any section of the design contain unclear, nonsensical or meaningless text?",
+      "probability": 0.25,
+      "status": "ok",
+      "sections": []
+    }
+  ],
+  "revisions": []
+}

@@ -1,0 +1,32 @@
+{
+  "bars": {
+    "X": "A",
+    "Y": "B2",
+    "Z": "B"
+  },
+  "clinic": {
+    "X": "B2",
+    "Y": "A",
+    "Z": "B"
+  },
+  "club_events": {
+    "X": "B2",
+    "Y": "B",
+    "Z": "A"
+  },
+  "handmade_store": {
+    "X": "B",
+    "Y": "A",
+    "Z": "B2"
+  },
+  "sensor_dashboard": {
+    "X": "B2",
+    "Y": "B",
+    "Z": "A"
+  },
+  "todo_sync": {
+    "X": "B2",
+    "Y": "A",
+    "Z": "B"
+  }
+}

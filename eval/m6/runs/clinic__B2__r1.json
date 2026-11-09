@@ -1,0 +1,268 @@
+{
+  "stage": "validated",
+  "requirements": {
+    "project_summary": "Web application for a small clinic enabling patients to book appointments with email/SMS reminders and doctors to manage schedules.",
+    "app_type": "web",
+    "core_features": [
+      "Online appointment booking",
+      "Email and SMS appointment reminders",
+      "Doctor daily schedule management"
+    ],
+    "user_roles": [
+      "patients",
+      "doctors"
+    ],
+    "expected_scale": {
+      "users": "305",
+      "peak_requests_per_second": null,
+      "data_volume": null
+    },
+    "realtime": null,
+    "geospatial": null,
+    "authentication": null,
+    "search_filtering": null,
+    "media_storage": null,
+    "payments": null,
+    "offline_support": null,
+    "external_integrations": [
+      "email provider",
+      "sms provider"
+    ],
+    "constraints": [],
+    "assumptions": [
+      "Appointment data is stored in a central database",
+      "Users log in to access specific views"
+    ],
+    "unknowns": [
+      "realtime not specified",
+      "geospatial not specified",
+      "authentication not specified",
+      "search_filtering not specified",
+      "media_storage not specified",
+      "payments not specified",
+      "offline_support not specified",
+      "Security compliance requirements (e.g., HIPAA)",
+      "Specific reminder timing rules",
+      "Multi-language support needs"
+    ],
+    "evidence": {
+      "app_type": "A web app"
+    }
+  },
+  "decisions": [
+    {
+      "id": "api_style",
+      "question": "Which API communication style best fits this project's needs?",
+      "status": "accepted",
+      "choice": "REST",
+      "probability": 1.0,
+      "top_alternatives": [
+        {
+          "option": "REST",
+          "probability": 1.0
+        },
+        {
+          "option": "GraphQL",
+          "probability": 0.0
+        }
+      ],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "primary_database",
+      "question": "Which database best suits the data storage needs of this project?",
+      "status": "accepted",
+      "choice": "PostgreSQL",
+      "probability": 1.0,
+      "top_alternatives": [
+        {
+          "option": "PostgreSQL",
+          "probability": 1.0
+        },
+        {
+          "option": "MongoDB",
+          "probability": 0.0
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "architecture_style",
+      "question": "Which architecture style is most appropriate for this project's scale?",
+      "status": "accepted",
+      "choice": "monolith",
+      "probability": 0.83,
+      "top_alternatives": [
+        {
+          "option": "monolith",
+          "probability": 0.83
+        },
+        {
+          "option": "modular monolith",
+          "probability": 0.17
+        }
+      ],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "cache_needed",
+      "question": "Does this project need a caching layer to meet its performance requirements?",
+      "status": "no",
+      "choice": null,
+      "probability": 0.2,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "async_processing_needed",
+      "question": "Does this project need asynchronous or background job processing?",
+      "status": "yes",
+      "choice": null,
+      "probability": 0.88,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "horizontal_scaling_needed",
+      "question": "Does this project need horizontal scaling to handle its expected load?",
+      "status": "no",
+      "choice": null,
+      "probability": 0.12,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    }
+  ],
+  "meta": {
+    "decision_model": "jev-1.13-free",
+    "input_tokens": 761,
+    "output_tokens": 186,
+    "decision_billing": "free",
+    "decision_cost": 0.0,
+    "llm_model": "qwen/qwen3.8-27b",
+    "design_prompt_tokens": 3350,
+    "design_completion_tokens": 1330,
+    "design_group_stats": [
+      {
+        "id": "g1",
+        "prompt_tokens": 835,
+        "completion_tokens": 443,
+        "retries": 0,
+        "elapsed_seconds": 36.906,
+        "retry_reasons": []
+      },
+      {
+        "id": "g2",
+        "prompt_tokens": 806,
+        "completion_tokens": 323,
+        "retries": 0,
+        "elapsed_seconds": 61.141,
+        "retry_reasons": []
+      },
+      {
+        "id": "g3",
+        "prompt_tokens": 874,
+        "completion_tokens": 308,
+        "retries": 0,
+        "elapsed_seconds": 60.922,
+        "retry_reasons": []
+      },
+      {
+        "id": "g4",
+        "prompt_tokens": 835,
+        "completion_tokens": 256,
+        "retries": 0,
+        "elapsed_seconds": 61.078,
+        "retry_reasons": []
+      }
+    ],
+    "validation_calls": 1,
+    "validation_input_tokens": 2382,
+    "validation_output_tokens": 190,
+    "validation_status": "passed",
+    "validation_model": "jev-1.13-free",
+    "writer_style": "confident"
+  },
+  "design_markdown": "## 1. Architecture overview\nThe system follows a monolith architecture to streamline development and reduce operational complexity. This style is appropriate for the 305 users in the expected scale, as horizontal scaling is not needed. A single deployable unit handles all business logic, providing a cohesive experience for both patients and doctors. Each developer works within the same codebase, simplifying refactoring. This design fits tightly with the central data storage assumption. There is no need for distributed architectures, which would add unnecessary overhead at this scale. The system is designed to grow vertically if required. Overall, this approach keeps the deployment model simple. It allows rapid production of the core features such as appointment booking and schedule management.\n\n## 2. Components and responsibilities\n*   **Web API layer**: This is a REST interface that handles all client requests. It manages authentication sessions for patients and doctors specifically.\n*   **Application core**: The first part of the monolith handles business rules for online appointment booking. It coordinates the main service logic for patient and doctor views.\n*   **Scheduler component**: This part of the moduli manages daily schedules for doctors. It ensures all appointment requests align with slot availability.\n*   **Async messaging component**: This component handles the asynchronous reminders, specifically email and SMS notifications. It is responsible for sending the messages promptly.\n*   **External integration service**: The monolith owns the clients for external email and SMS providers. It sends the requests for the notifications.\n*   **Data access layer**: The monolith contains components for all database access. It writes appointment and user data to the primary store.\n\n## 3. Data flow\nA user logs in and sends a REST request to the monolith. The application verifies the patient or doctor role by checking the authentication token. The appointment booking or schedule management service queries the central database for existing records. The service then modifies the relevant data and writes the update to the store. If a reminder is required, the application posts a message to the internal queue. The asynchronous processor reads the message and triggers the integration service for email and SMS. The system then sends the reminders to the relevant external email provider.\n\n## 4. API architecture\nWe use a REST API because it provides straightforward stateless interactions for the web front-end, avoiding unnecessary complexity for this user base. The primary operations focus on authentication, appointment creation, and schedule retrieval. Patients access endpoints to view available slots and book appointments, while doctors manage their daily schedules. Specific routes handle creation of appointments and cancellation workflows. \n\nFor error handling, the system returns standard HTTP status codes with a consistent JSON body containing a machine-readable error code and a human-readable message. This ensures the client application can handle failures uniformly without parsing free-text responses. Resource versioning is unnecessary at this scale, so we rely on stable endpoint contracts. Data payloads remain simple JSON structures, optimizing for quick parsing and transmission over standard web connections.\n\n## 5. Database architecture and data model\nPostgreSQL serves as the primary database due to its strong relational integrity and ACID compliance, which are critical for accurate scheduling and financial-like transactional consistency. The data model centers on three main entities: Users, Doctors, and Appointments. Users store profile data for both patients and medical staff. The Doctors table extends this profile to include availability rules. \n\nAppointments link specific patients to doctors via foreign keys, recording the scheduled time, status, and type. A many-to-one relationship exists between appointments and both patients and doctors. We index columns on appointment dates and status to speed up the querying of daily schedules. Given the modest user count, partitioning is not required. The schema ensures that no two conflicting bookings can exist for the same doctor at the same time through unique constraints.\n\n## 6. Authentication\nThe system uses JWT-based authentication for both patients and doctors, supporting standard email and password login. Since users access role-specific views, tokens embed role claims to enforce access control at the API layer. With 305 users and no specified compliance requirements, session lifetime is set to 8 hours with automatic refresh via short-lived refresh tokens. This approach fits the monolith architecture without requiring external identity providers.\n\n## 7. Caching\nCaching is not needed for this application. The user base of 305 and unspecified peak requests per second indicate minimal read load, making an in-memory cache layer unnecessary. PostgreSQL alone handles the required query performance for appointment lookups and schedule management.\n\n## 8. External services\n- Email provider: Delivers appointment confirmation messages and reminder notifications to patients via email.\n- SMS provider: Sends time-sensitive appointment reminders to patients over short message service.\n\nBoth integrations are invoked by the asynchronous processing pipeline, ensuring reminder delivery does not block user-facing requests.\n\n## 9. Security considerations\n- Input validation is enforced at the API boundary using schema-based validation to prevent injection attacks.\n- Secrets (provider API keys, database credentials) are stored outside the codebase in an environment-based secret store.\n- Access control is enforced via JWT role claims; patient endpoints are invisible to doctors and vice versa.\n- Passwords are hashed with bcrypt before storage in PostgreSQL.\n- All external communication uses HTTPS to protect data in transit.\n\n## 10. Scaling\nThe system operates within a single-node deployment footprint. Given the expected user base and traffic levels, the current architecture supports anticipated load without architectural change. Asynchronous processing ensures that notification tasks do not block user-facing request threads. Should data volumes grow significantly, the PostgreSQL instance can be scaled vertically. No partitioning or sharding strategies are required at this stage.\n\n## 11. Failure handling\nThe system relies on PostgreSQL for data persistence. Connection timeouts are configured to prevent indefinite blocking during database unavailability. External email and SMS providers are wrapped in retry mechanisms to handle transient network errors. If notifications fail after retries, the system logs the failure for manual review. There is no automated fallback for communication channels.\n\n## 12. Trade-offs and rationale\n*   **Monolith over microservices:** Simpler deployment and lower operational overhead suit the small user base. Network latency between service boundaries is avoided.\n*   **PostgreSQL over NoSQL:** Relational integrity is crucial for schedule logic and booking conflicts. Transactional guarantees prevent double-booking scenarios.\n*   **REST over WebSockets:** Batch and simple request-response patterns suit appointment booking flows. Reduced connection management complexity aligns with the absence of realtime requirements.\n\n## 13. Assumptions and open questions\n\n### Decided\n- API style: REST (confidence 100%)\n- Primary database: PostgreSQL (confidence 100%)\n- Architecture style: monolith (confidence 83%)\n- Judged not needed: Caching (estimated 20% likelihood it is needed)\n- Judged needed: Asynchronous processing\n- Judged not needed: Horizontal scaling (estimated 12% likelihood it is needed)\n\n### Depends on unspecified requirements\n- Realtime: affects Asynchronous processing\n- Geospatial: affects Primary database\n\n### Other open questions\n- Security compliance requirements (e.g., HIPAA)\n- Specific reminder timing rules\n- Multi-language support needs",
+  "design_warnings": [],
+  "validation": [
+    {
+      "id": "val_decision_api_style",
+      "text": "Does the design clearly use REST for API style?",
+      "probability": 0.99,
+      "status": "ok",
+      "sections": [
+        4
+      ]
+    },
+    {
+      "id": "val_decision_primary_database",
+      "text": "Does the design clearly use PostgreSQL for Primary database?",
+      "probability": 0.99,
+      "status": "ok",
+      "sections": [
+        5
+      ]
+    },
+    {
+      "id": "val_decision_architecture_style",
+      "text": "Does the design clearly use monolith for Architecture style?",
+      "probability": 0.99,
+      "status": "ok",
+      "sections": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "val_missing_component",
+      "text": "Is any component that these requirements need missing from the design, for example a data source, a storage component, a notification service or an external integration?",
+      "probability": 0.28,
+      "status": "ok",
+      "sections": [
+        2,
+        8
+      ]
+    },
+    {
+      "id": "val_invented",
+      "text": "Does the design present features or requirements that are not in the requirements, for example extra user roles, accounts, ratings or payments?",
+      "probability": 0.21,
+      "status": "ok",
+      "sections": [
+        2,
+        5
+      ]
+    },
+    {
+      "id": "val_contradiction",
+      "text": "Do any two sections of the design contradict each other?",
+      "probability": 0.23,
+      "status": "ok",
+      "sections": []
+    },
+    {
+      "id": "val_unneeded_complexity",
+      "text": "Is the design more complex than these requirements need?",
+      "probability": 0.2,
+      "status": "ok",
+      "sections": []
+    },
+    {
+      "id": "val_scale_overclaim",
+      "text": "Does the design claim it can handle a specific load or scale that the requirements do not state?",
+      "probability": 0.32,
+      "status": "ok",
+      "sections": [
+        10
+      ]
+    },
+    {
+      "id": "val_incoherent",
+      "text": "Does any section of the design contain unclear, nonsensical or meaningless text?",
+      "probability": 0.3,
+      "status": "ok",
+      "sections": []
+    }
+  ],
+  "revisions": []
+}
