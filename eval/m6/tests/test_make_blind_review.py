@@ -71,6 +71,30 @@ def test_review_file_contains_both_designs_and_a_rating_form(tmp_path, _runs_dir
         assert field in content
 
 
+def test_section_13_is_stripped_from_the_blind_review_file(tmp_path):
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    _write_run(
+        runs_dir, "idea1__A__r1", "idea1", "A", 1,
+        "## 1. Architecture overview\n\ntext A\n\n## 13. Assumptions and open questions\n- secret A",
+    )
+    _write_run(
+        runs_dir, "idea1__B__r1", "idea1", "B", 1,
+        "## 1. Architecture overview\n\ntext B\n\n## 13. Assumptions and open questions\n- secret B",
+    )
+
+    blind_dir = tmp_path / "blind"
+    key = mb.make_blind_reviews(seed=7, runs_dir=runs_dir, blind_dir=blind_dir)
+
+    content = (blind_dir / "idea1.md").read_text(encoding="utf-8")
+    assert "## 13." not in content
+    assert "secret A" not in content and "secret B" not in content
+    assert "text A" in content and "text B" in content
+    # Key still maps X and Y to A and B correctly despite the stripped text.
+    assert set(key["idea1"].keys()) == {"X", "Y"}
+    assert set(key["idea1"].values()) == {"A", "B"}
+
+
 def test_reveal_maps_x_y_ratings_back_to_a_b_averages(tmp_path):
     key_path = tmp_path / "blind_key.json"
     key_path.write_text(json.dumps({"idea1": {"X": "B", "Y": "A"}}), encoding="utf-8")

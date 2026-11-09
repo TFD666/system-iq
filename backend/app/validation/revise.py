@@ -10,7 +10,9 @@ caller is expected to only pass section numbers 1-12 here.
 
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 
 from ..design.checks import split_into_sections
 from ..design.limiter import TokenBudget
@@ -39,23 +41,33 @@ MAX_SECTIONS_PER_REVISE_CALL = 3
 # raw Jev probability number, and never prompt/model text in logs.
 _ISSUE_TEMPLATES = {
     "val_geospatial": (
-        "The design must explain how location-based queries are supported, "
-        "for example with a spatial index or a geospatial database."
+        "The design must clearly state how location-based queries are "
+        "supported, for example with a spatial index or a geospatial database."
     ),
-    "val_search": "The design must describe how users search or filter results.",
-    "val_auth": "The design must address user authentication.",
-    "val_missing_component": "Add any component these requirements need that is missing from the design.",
-    "val_invented": (
-        "Remove claims that are not in the requirements, for example "
-        "features like reviews, ratings, or user accounts that were not requested."
+    "val_search": "The design must clearly state how users search or filter results.",
+    "val_auth": "The design must clearly state how user authentication works.",
+    "val_missing_component": (
+        "The validation found that a component these requirements need is "
+        "missing from the design. Identify the most likely missing component, "
+        "for example where the application's data comes from, a storage "
+        "component or an external service the requirements imply. Add it to "
+        "the sections you are rewriting, name it, say what it does and how "
+        "it connects to the other components. If the requirements do not "
+        "name it, label it as an assumption in one sentence."
     ),
+    "val_invented": "Remove any feature that is not in the requirements.",
     "val_contradiction": "Make sure no two sections contradict each other; resolve any contradiction.",
     "val_unneeded_complexity": "Simplify the design; it must not be more complex than these requirements need.",
     "val_scale_overclaim": (
-        "Remove any claim about handling a specific load or scale that the "
+        "Remove any claim about a specific load or scale that the "
         "requirements do not state."
     ),
 }
+
+# Post-revision sanity check thresholds (see _revision_is_acceptable).
+_MIN_WORD_CHANGE_RATIO = 0.25
+_BOLD_RE = re.compile(r"\*\*([^*]{2,80})\*\*")
+_CAPITALIZED_PHRASE_RE = re.compile(r"\b(?:[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\b")
 
 
 def _issue_statement(result: ValidationResult, decisions: list[DecisionResultOut] | None) -> str:
@@ -63,8 +75,37 @@ def _issue_statement(result: ValidationResult, decisions: list[DecisionResultOut
         decision_id = result.id[len("val_decision_"):]
         decision = next((d for d in (decisions or []) if d.id == decision_id), None)
         if decision is not None:
-            return f"The design must clearly use {decision.choice} for {_label_for(decision_id)}."
+            return f"The design must clearly state that it uses {decision.choice} for {_label_for(decision_id)}."
     return _ISSUE_TEMPLATES.get(result.id, "Fix the issue this section was flagged for.")
+
+
+def _word_change_ratio(old_text: str, new_text: str) -> float:
+    """Fraction of words changed between old and new, word-level and
+    case-insensitive (1 - SequenceMatcher's match ratio)."""
+    old_words = old_text.lower().split()
+    new_words = new_text.lower().split()
+    matcher = difflib.SequenceMatcher(a=old_words, b=new_words, autojunk=False)
+    return 1 - matcher.ratio()
+
+
+def _component_like_phrases(text: str) -> set[str]:
+    """Crude heuristic for named components: bolded names, or two-or-more
+    consecutive Capitalized Words (e.g. "Storage Service")."""
+    return {p.strip().lower() for p in _BOLD_RE.findall(text)} | {
+        p.lower() for p in _CAPITALIZED_PHRASE_RE.findall(text)
+    }
+
+
+def _introduces_new_component(old_text: str, new_text: str) -> bool:
+    return bool(_component_like_phrases(new_text) - _component_like_phrases(old_text))
+
+
+def _revision_is_acceptable(old_text: str, new_text: str, needs_new_component: bool) -> bool:
+    if _word_change_ratio(old_text, new_text) < _MIN_WORD_CHANGE_RATIO:
+        return False
+    if needs_new_component and not _introduces_new_component(old_text, new_text):
+        return False
+    return True
 
 
 def _sections_to_revise(flagged_results: list[ValidationResult]) -> list[int]:
@@ -154,8 +195,19 @@ def revise_sections(
                 # OLD text untouched, never junk or a generic fallback line.
                 warnings.append(f"revision quality gate failed: {heading}")
                 continue
-            bodies[heading] = new_bodies.get(heading) or bodies.get(heading) or ""
-            revised.add(heading_number(heading))
+
+            old_text = bodies.get(heading) or ""
+            new_text = new_bodies.get(heading) or old_text
+            hn = heading_number(heading)
+            ids_for_heading = [r.id for r in flagged_results if hn in r.sections]
+            needs_new_component = "val_missing_component" in ids_for_heading
+            if not _revision_is_acceptable(old_text, new_text, needs_new_component):
+                warn_id = ids_for_heading[0] if ids_for_heading else pseudo_group["id"]
+                warnings.append(f"revision no change: {warn_id}")
+                continue
+
+            bodies[heading] = new_text
+            revised.add(hn)
 
     new_markdown = "\n\n".join(f"{h}\n{bodies[h]}" for h in headings)
     return new_markdown, sorted(revised), warnings

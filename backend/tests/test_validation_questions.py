@@ -104,6 +104,15 @@ def test_six_problem_questions_are_always_present():
         assert expected in ids
 
 
+def test_missing_component_and_invented_question_texts_are_domain_neutral():
+    # Was a bar-specific example ("a source of the venue data"/"reviews,
+    # ratings or user accounts") that biased validation for other ideas.
+    by_id = {q.id: q for q in build_validation_questions(_make_requirements(), None)}
+    assert "venue" not in by_id["val_missing_component"].text.lower()
+    assert "data source" in by_id["val_missing_component"].text
+    assert "extra user roles" in by_id["val_invented"].text
+
+
 def test_problem_questions_have_their_fixed_sections():
     by_id = {q.id: q for q in build_validation_questions(_make_requirements(), None)}
     assert by_id["val_missing_component"].sections == [2, 8]

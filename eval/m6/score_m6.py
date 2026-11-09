@@ -98,6 +98,25 @@ _WRITTEN_NUMBER_RE = re.compile(
 _ASSUMPTION_TOKENS = ("unspecified", "not specified", "not stated", "assum")
 _LEAK_PHRASES = ("decisions are provided", "no decisions", "decisions were provided")
 
+# A mention in a sentence containing any of these means the tech was
+# rejected/compared, not chosen -- never counted toward tech_choices.
+_NEGATION_PHRASES = (
+    "avoid", "avoids", "instead of", "rather than", "not", "without", "over",
+    "versus", "vs", "unlike", "no need for", "rejected", "considered but", "ruled out",
+)
+_NEGATION_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(p) for p in _NEGATION_PHRASES) + r")\b", re.IGNORECASE,
+)
+
+# decision.id -> which section(s) are that decision's own, for
+# decision_adherence_in_designated_section (api_style 4, database 5,
+# architecture 1 or 2 -- only decisions that map to a TECH_CATEGORIES slot).
+_DECISION_DESIGNATED_SECTIONS = {
+    "api_style": (4,),
+    "primary_database": (5,),
+    "architecture_style": (1, 2),
+}
+
 
 def _retry_reason_counts(group_stats: list) -> dict:
     counts: dict[str, int] = {}
@@ -293,29 +312,73 @@ def _number_is_supported(value: int, idea_text: str, requirements: dict) -> bool
     return False
 
 
-def _term_count(synonyms: list[str], text: str) -> int:
-    return sum(len(re.findall(r"\b" + re.escape(syn) + r"\b", text, re.IGNORECASE)) for syn in synonyms)
+def _sentence_around(text: str, pos: int) -> str:
+    """The sentence (bounded by . ! ? or newline) containing char offset pos."""
+    left = max((text.rfind(ch, 0, pos) for ch in ".!?\n"), default=-1) + 1
+    right_candidates = [c for ch in ".!?\n" if (c := text.find(ch, pos)) != -1]
+    right = min(right_candidates) if right_candidates else len(text)
+    return text[left:right]
+
+
+def _is_negated_mention(text: str, pos: int) -> bool:
+    """True when the sentence containing this match rejects/compares the
+    tech rather than choosing it (e.g. "avoids microservices")."""
+    return bool(_NEGATION_RE.search(_sentence_around(text, pos)))
+
+
+def _finditer_excluding_negated(pattern: str, text: str) -> tuple[list[re.Match], int]:
+    """(non-negated matches, count of matches excluded as negated)."""
+    matches = []
+    ignored = 0
+    for m in re.finditer(pattern, text, re.IGNORECASE):
+        if _is_negated_mention(text, m.start()):
+            ignored += 1
+        else:
+            matches.append(m)
+    return matches, ignored
+
+
+def _term_count(synonyms: list[str], text: str) -> tuple[int, int]:
+    """(effective count, ignored-as-negated count) across all synonyms."""
+    count = 0
+    ignored = 0
+    for syn in synonyms:
+        matches, syn_ignored = _finditer_excluding_negated(r"\b" + re.escape(syn) + r"\b", text)
+        count += len(matches)
+        ignored += syn_ignored
+    return count, ignored
 
 
 def _term_first_position(synonyms: list[str], text: str) -> int | None:
-    positions = [m.start() for syn in synonyms if (m := re.search(r"\b" + re.escape(syn) + r"\b", text, re.IGNORECASE))]
+    positions = []
+    for syn in synonyms:
+        matches, _ignored = _finditer_excluding_negated(r"\b" + re.escape(syn) + r"\b", text)
+        positions.extend(m.start() for m in matches)
     return min(positions) if positions else None
 
 
-def _category_counts_and_positions(category: str, text: str) -> tuple[dict[str, int], dict[str, int | None]]:
-    """Returns (counts, first-match char offset) per term in `text`."""
+def _category_counts_and_positions(
+    category: str, text: str,
+) -> tuple[dict[str, int], dict[str, int | None], dict[str, int]]:
+    """Returns (counts, first-match char offset, ignored-as-negated counts)
+    per term in `text`. Counts never include a negated mention (e.g.
+    "avoids microservices")."""
     if category == "architecture":
-        modular_matches = list(re.finditer(r"\bmodular\s+monolith\b", text, re.IGNORECASE))
+        modular_matches, modular_ignored = _finditer_excluding_negated(r"\bmodular\s+monolith\b", text)
         monolith_pos = None
         monolith_count = 0
+        monolith_ignored = 0
         for m in re.finditer(r"\bmonolith\b", text, re.IGNORECASE):
             if re.search(r"modular\s*$", text[:m.start()], re.IGNORECASE):
                 continue  # part of "modular monolith" -- never double-counted
+            if _is_negated_mention(text, m.start()):
+                monolith_ignored += 1
+                continue
             monolith_count += 1
             if monolith_pos is None:
                 monolith_pos = m.start()
-        micro_matches = list(re.finditer(r"\bmicroservices?\b", text, re.IGNORECASE))
-        serverless_matches = list(re.finditer(r"\bserverless\b", text, re.IGNORECASE))
+        micro_matches, micro_ignored = _finditer_excluding_negated(r"\bmicroservices?\b", text)
+        serverless_matches, serverless_ignored = _finditer_excluding_negated(r"\bserverless\b", text)
         counts = {
             "modular monolith": len(modular_matches),
             "monolith": monolith_count,
@@ -328,12 +391,21 @@ def _category_counts_and_positions(category: str, text: str) -> tuple[dict[str, 
             "microservices": micro_matches[0].start() if micro_matches else None,
             "serverless": serverless_matches[0].start() if serverless_matches else None,
         }
-        return counts, positions
+        ignored_counts = {
+            "modular monolith": modular_ignored,
+            "monolith": monolith_ignored,
+            "microservices": micro_ignored,
+            "serverless": serverless_ignored,
+        }
+        return counts, positions, ignored_counts
 
     synonyms_by_term = _API_STYLE_TERMS if category == "api_style" else _DATABASE_TERMS
-    counts = {term: _term_count(syns, text) for term, syns in synonyms_by_term.items()}
+    counts: dict[str, int] = {}
+    ignored_counts: dict[str, int] = {}
+    for term, syns in synonyms_by_term.items():
+        counts[term], ignored_counts[term] = _term_count(syns, text)
     positions = {term: _term_first_position(syns, text) for term, syns in synonyms_by_term.items()}
-    return counts, positions
+    return counts, positions, ignored_counts
 
 
 def _pick_winner(counts: dict[str, int], positions: dict[str, int | None]) -> str:
@@ -350,38 +422,55 @@ def _pick_winner(counts: dict[str, int], positions: dict[str, int | None]) -> st
     return min(tied_positions, key=lambda t: tied_positions[t])
 
 
-def _tech_choices(markdown: str) -> tuple[dict, dict, dict]:
+def _tech_choices(markdown: str) -> tuple[dict, dict, dict, dict]:
     """
-    Returns (choices, counts, scope) per category: the winning term (or
-    "mixed"/"none"), the raw per-term counts, and which text the winner
-    came from -- the category's own section(s), or a fallback to the full
-    sections 1-12 text when its own section(s) had no mention at all.
+    Returns (choices, counts, scope, ignored) per category: the winning term
+    (or "mixed"/"none"), the per-term counts (negated mentions like "avoids
+    microservices" excluded), which text the winner came from -- the
+    category's own section(s), or a fallback to the full sections 1-12 text
+    when its own section(s) had no mention at all -- and how many mentions
+    per term were excluded as negated.
     """
     choices: dict[str, str] = {}
     counts_by_category: dict[str, dict[str, int]] = {}
     scope_by_category: dict[str, str] = {}
+    ignored_by_category: dict[str, dict[str, int]] = {}
     for category in TECH_CATEGORIES:
         designated_text = _section_numbers_text(markdown, _CATEGORY_SECTIONS[category])
-        counts, positions = _category_counts_and_positions(category, designated_text)
+        counts, positions, ignored = _category_counts_and_positions(category, designated_text)
         scope = "designated"
         if not any(counts.values()):
             scope = "fallback (1-12)"
-            counts, positions = _category_counts_and_positions(category, _sections_1_12_text(markdown))
+            counts, positions, ignored = _category_counts_and_positions(category, _sections_1_12_text(markdown))
         choices[category] = _pick_winner(counts, positions)
         counts_by_category[category] = counts
         scope_by_category[category] = scope
-    return choices, counts_by_category, scope_by_category
+        ignored_by_category[category] = ignored
+    return choices, counts_by_category, scope_by_category, ignored_by_category
 
 
-def _decision_adherence(decisions: list | None, markdown: str) -> float | str:
+def _decision_adherence(decisions: list | None, markdown: str) -> tuple[float | str, float | str]:
+    """Returns (adherence, adherence_in_designated_section). Both are
+    computed over sections 1-12 only -- section 13 is code-generated from
+    the decisions and would pass by construction."""
     if not decisions:
-        return "n/a"
+        return "n/a", "n/a"
     accepted = [d for d in decisions if d.get("status") == "accepted" and d.get("choice")]
     if not accepted:
-        return "n/a"
-    markdown_lower = markdown.lower()
-    hits = sum(1 for d in accepted if d["choice"].lower() in markdown_lower)
-    return hits / len(accepted)
+        return "n/a", "n/a"
+
+    sections_1_12 = _sections_1_12_text(markdown).lower()
+    hits = sum(1 for d in accepted if d["choice"].lower() in sections_1_12)
+    adherence = hits / len(accepted)
+
+    designated = [d for d in accepted if d["id"] in _DECISION_DESIGNATED_SECTIONS]
+    if not designated:
+        return adherence, "n/a"
+    designated_hits = sum(
+        1 for d in designated
+        if d["choice"].lower() in _section_numbers_text(markdown, _DECISION_DESIGNATED_SECTIONS[d["id"]]).lower()
+    )
+    return adherence, designated_hits / len(designated)
 
 
 def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> dict:
@@ -413,7 +502,7 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
     assumption_mentions = sum(sections_text_lower.count(tok) for tok in _ASSUMPTION_TOKENS)
     leak_hits = sum(sections_text_lower.count(p) for p in _LEAK_PHRASES)
 
-    tech_choices, tech_counts, tech_scope = _tech_choices(markdown)
+    tech_choices, tech_counts, tech_scope, tech_ignored = _tech_choices(markdown)
 
     group_stats = meta.get("design_group_stats") or []
     elapsed_seconds = sum(stat.get("elapsed_seconds") or 0 for stat in group_stats)
@@ -421,7 +510,9 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
     retry_reason_counts = _retry_reason_counts(group_stats)
 
     if version == "B":
-        decision_adherence = _decision_adherence(body.get("decisions"), markdown)
+        decision_adherence, decision_adherence_in_designated_section = _decision_adherence(
+            body.get("decisions"), markdown,
+        )
         jev_requests = 1 + (meta.get("validation_calls") or 0)
         jev_input_tokens = (meta.get("input_tokens") or 0) + (meta.get("validation_input_tokens") or 0)
         jev_output_tokens = (meta.get("output_tokens") or 0) + (meta.get("validation_output_tokens") or 0)
@@ -430,6 +521,7 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
         possible_ids = [v["id"] for v in validation if v.get("status") == "possible"]
     else:
         decision_adherence = "n/a"
+        decision_adherence_in_designated_section = "n/a"
         jev_requests = 0
         jev_input_tokens = 0
         jev_output_tokens = 0
@@ -447,9 +539,11 @@ def _score_one_run(run_id: str, body: dict, meta_info: dict, idea_text: str) -> 
         "placeholder_hits": placeholder_hits,
         "jargon_hits": jargon_hits,
         "decision_adherence": decision_adherence,
+        "decision_adherence_in_designated_section": decision_adherence_in_designated_section,
         "tech_choices": tech_choices,
         "tech_counts": tech_counts,
         "tech_scope": tech_scope,
+        "tech_ignored": tech_ignored,
         "numeric_claims": numeric_claims,
         "unsupported_numbers": unsupported_numbers,
         "unsupported_listing": unsupported_listing,
@@ -515,6 +609,13 @@ def score(ideas_dir: Path = DEFAULT_IDEAS_DIR, runs_dir: Path = RUNS_DIR) -> dic
             aggregate[version][key] = _mean([r[key] for r in version_runs])
         adherence_values = [r["decision_adherence"] for r in version_runs if isinstance(r["decision_adherence"], (int, float))]
         aggregate[version]["decision_adherence"] = _mean(adherence_values) if adherence_values else "n/a"
+        designated_values = [
+            r["decision_adherence_in_designated_section"] for r in version_runs
+            if isinstance(r["decision_adherence_in_designated_section"], (int, float))
+        ]
+        aggregate[version]["decision_adherence_in_designated_section"] = (
+            _mean(designated_values) if designated_values else "n/a"
+        )
 
         retry_reason_totals: dict[str, int] = {}
         for r in version_runs:
@@ -576,8 +677,8 @@ def render_report(data: dict) -> str:
         lines.append("| version | repeat | sections_found | fallback_lines | warnings | "
                       "placeholder_hits | jargon_hits | leak_hits | retries | decision_adherence | "
                       "numeric_claims | unsupported_numbers | assumption_mentions | tech_choices (scope) | "
-                      "tech_counts | jev_requests |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+                      "tech_counts | tech_ignored | jev_requests |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for version in ("A", "B"):
             for r in data["by_idea_version"].get((idea, version), []):
                 scope_abbrev = {"designated": "d", "fallback (1-12)": "f"}
@@ -589,12 +690,16 @@ def render_report(data: dict) -> str:
                     ",".join(f"{term}={c}" for term, c in counts.items() if c > 0) or "-"
                     for counts in r["tech_counts"].values()
                 )
+                tech_ignored = "; ".join(
+                    ",".join(f"{term}={c}" for term, c in ignored.items() if c > 0) or "-"
+                    for ignored in r["tech_ignored"].values()
+                )
                 lines.append(
                     f"| {r['version']} | {r['repeat']} | {r['sections_found']} | {r['fallback_lines']} | "
                     f"{r['design_warnings']} | {r['placeholder_hits']} | {r['jargon_hits']} | "
                     f"{r['leak_hits']} | {r['retries']} | {_fmt(r['decision_adherence'])} | "
                     f"{r['numeric_claims']} | {r['unsupported_numbers']} | {r['assumption_mentions']} | "
-                    f"{tech} | {tech_counts} | {r['jev_requests']} |"
+                    f"{tech} | {tech_counts} | {tech_ignored} | {r['jev_requests']} |"
                 )
         lines.append("")
 
@@ -609,6 +714,10 @@ def render_report(data: dict) -> str:
         lines.append(f"| {key} | {a_val} | {b_val} |")
     lines.append(
         f"| decision_adherence | n/a | {_fmt(data['aggregate']['B'].get('decision_adherence', 'n/a'))} |"
+    )
+    lines.append(
+        f"| decision_adherence_in_designated_section | n/a | "
+        f"{_fmt(data['aggregate']['B'].get('decision_adherence_in_designated_section', 'n/a'))} |"
     )
     lines.append("")
 

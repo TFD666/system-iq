@@ -60,6 +60,42 @@ def test_decision_adherence_fraction_of_accepted_choices_mentioned():
     assert result["decision_adherence"] == 0.5
 
 
+def test_decision_adherence_ignores_section_13():
+    # The chosen option appears only in section 13 (code-built from the
+    # decisions) -- must not count, or adherence passes by construction.
+    markdown = _headings_markdown({13: "We use REST for the API."})
+    decisions = [{"id": "api_style", "status": "accepted", "choice": "REST"}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence"] == 0.0
+
+
+def test_decision_adherence_in_designated_section_true_when_in_its_own_section():
+    markdown = _headings_markdown({4: "We use REST for the API."})
+    decisions = [{"id": "api_style", "status": "accepted", "choice": "REST"}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence_in_designated_section"] == 1.0
+
+
+def test_decision_adherence_in_designated_section_false_when_elsewhere():
+    # REST only appears in section 1, not api_style's own section (4).
+    markdown = _headings_markdown({1: "We use REST for the API."})
+    decisions = [{"id": "api_style", "status": "accepted", "choice": "REST"}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence"] == 1.0
+    assert result["decision_adherence_in_designated_section"] == 0.0
+
+
+def test_decision_adherence_in_designated_section_is_n_a_for_unmapped_decision_ids():
+    markdown = _headings_markdown({6: "We use JWT for auth."})
+    decisions = [{"id": "auth_approach", "status": "accepted", "choice": "JWT"}]
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": decisions}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B", "repeat": 1}, "")
+    assert result["decision_adherence_in_designated_section"] == "n/a"
+
+
 def test_decision_adherence_is_n_a_for_version_a():
     markdown = _headings_markdown({})
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}, "decisions": None}
@@ -124,6 +160,25 @@ def test_architecture_is_detected_in_sections_1_and_2_only_by_default():
     assert result["tech_scope"]["architecture"] == "designated"
 
 
+def test_negated_tech_mention_is_not_counted_toward_the_winner():
+    markdown = _headings_markdown({1: "The design avoids microservices. It uses a modular monolith instead."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_counts"]["architecture"]["microservices"] == 0
+    assert result["tech_ignored"]["architecture"]["microservices"] == 1
+    assert result["tech_choices"]["architecture"] == "modular monolith"
+
+
+def test_negated_mention_via_not_word_boundary_does_not_match_notification():
+    # "not" must be matched as a whole word -- "notification" must never
+    # be treated as a negated sentence because it contains "not".
+    markdown = _headings_markdown({4: "A notification triggers a REST call."})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["tech_counts"]["api_style"]["REST"] == 1
+    assert result["tech_ignored"]["api_style"]["REST"] == 0
+
+
 def test_restful_and_rest_api_both_count_as_rest():
     markdown = _headings_markdown({4: "Uses a RESTful style with a REST API and REST-based endpoints."})
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
@@ -135,7 +190,10 @@ def test_restful_and_rest_api_both_count_as_rest():
 def test_modular_monolith_is_not_also_counted_as_plain_monolith():
     # Architecture is detected in sections 1-2; a 1-vs-1 tie is broken by
     # earliest mention -- "modular monolith" comes first here.
-    markdown = _headings_markdown({1: "A modular monolith architecture, not a plain monolith elsewhere."})
+    # Was "not a plain monolith" -- "not" put both mentions in a negated
+    # sentence under the new negation-aware tech detection; "no" isn't a
+    # negation word here, so this keeps the original intent.
+    markdown = _headings_markdown({1: "A modular monolith architecture, with no plain monolith elsewhere."})
     body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
     result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
     assert result["tech_counts"]["architecture"]["modular monolith"] == 1

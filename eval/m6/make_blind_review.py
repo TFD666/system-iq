@@ -15,6 +15,7 @@ import argparse
 import csv
 import json
 import random
+import re
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -26,9 +27,17 @@ REPORT_PATH = HERE / "report.md"
 
 RATING_FIELDS = ("specific", "correct", "useful", "clear")
 
+# Section 13 is code-built from the decisions, not written by the LLM --
+# never shown in a blind review (it would give away which design is which).
+_SECTION_13_RE = re.compile(r"\n?## 13\..*", re.DOTALL)
+
 
 def _read_json_bom(path: Path) -> dict:
     return json.loads(path.read_bytes().decode("utf-8-sig"))
+
+
+def _strip_section_13(markdown: str) -> str:
+    return _SECTION_13_RE.sub("", markdown).rstrip()
 
 
 def build_review_assignments(ideas: list[str], seed: int) -> dict[str, str]:
@@ -69,8 +78,8 @@ def make_blind_reviews(
     for idea in ideas_with_both:
         x_version = x_is_version[idea]
         y_version = "B" if x_version == "A" else "A"
-        design_x = _read_json_bom(result_paths[(idea, x_version)]).get("design_markdown") or ""
-        design_y = _read_json_bom(result_paths[(idea, y_version)]).get("design_markdown") or ""
+        design_x = _strip_section_13(_read_json_bom(result_paths[(idea, x_version)]).get("design_markdown") or "")
+        design_y = _strip_section_13(_read_json_bom(result_paths[(idea, y_version)]).get("design_markdown") or "")
 
         content = (
             f"# Blind review: {idea}\n\n"

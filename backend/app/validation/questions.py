@@ -96,7 +96,8 @@ def build_validation_questions(
         sections=[2, 8],
         text=(
             "Is any component that these requirements need missing from "
-            "the design, for example a source of the venue data?"
+            "the design, for example a data source, a storage component, "
+            "a notification service or an external integration?"
         ),
     ))
     questions.append(ValidationQuestion(
@@ -105,7 +106,8 @@ def build_validation_questions(
         sections=[2, 5],
         text=(
             "Does the design present features or requirements that are not "
-            "in the requirements, for example reviews, ratings or user accounts?"
+            "in the requirements, for example extra user roles, accounts, "
+            "ratings or payments?"
         ),
     ))
     questions.append(ValidationQuestion(

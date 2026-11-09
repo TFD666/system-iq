@@ -59,6 +59,12 @@ def _good_body() -> str:
     return " ".join(["word"] * 60)
 
 
+def _revised_body() -> str:
+    # Different filler than _good_body() -- clears the 25% word-change
+    # threshold revise.py now requires before accepting a revision.
+    return " ".join(["newword"] * 60)
+
+
 def _design_markdown() -> str:
     return "\n\n".join(f"{heading}\n{_good_body()}" for heading in all_headings())
 
@@ -78,7 +84,7 @@ class EchoLLM(LLMProvider):
 
     def complete_text(self, system, user, max_tokens):
         headings = re.findall(r"^## \d+\..*$", system, re.MULTILINE)
-        body = "\n\n".join(f"{h}\nRevised. {_good_body()}" for h in headings)
+        body = "\n\n".join(f"{h}\nRevised. {_revised_body()}" for h in headings)
         return LLMResult(text=body, prompt_tokens=10, completion_tokens=20)
 
 
