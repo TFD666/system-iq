@@ -99,6 +99,16 @@ _WRITTEN_NUMBER_RE = re.compile(
 _ASSUMPTION_TOKENS = ("unspecified", "not specified", "not stated", "assum")
 _LEAK_PHRASES = ("decisions are provided", "no decisions", "decisions were provided")
 
+# A = llm_only baseline, B = pipeline (hedged writer voice), B2 = pipeline
+# with writer_style "confident" (same voice as A, decisions as directives).
+VERSIONS = ("A", "B", "B2")
+_VALIDATED_VERSIONS = ("B", "B2")  # versions with decisions + validation
+
+# Words/phrases that signal visible hedging in the written design -- kept
+# for every version (A included) so B2's "no hedging" claim can be checked
+# against a baseline, not just eyeballed.
+_HEDGING_PHRASES = ("to be confirmed", "proposed", "tentative", "pending", "not yet decided", "unclear")
+
 # A mention in a sentence containing any of these means the tech was
 # rejected/compared, not chosen -- never counted toward tech_choices.
 _NEGATION_PHRASES = (
@@ -165,6 +175,7 @@ def _wording_label(validation: list) -> str:
 def _is_real_run(version: str, meta: dict) -> bool:
     if version == "A":
         return bool(meta.get("llm_model")) and bool(meta.get("design_group_stats"))
+    # B and B2 share the same real-run checks (B2 adds writer_style in run_eval.py).
     decision_model = str(meta.get("decision_model") or "").lower()
     validation_model = meta.get("validation_model")
     if "fake" in decision_model or "replay" in decision_model:
@@ -569,6 +580,7 @@ def _score_one_run(
 
     assumption_mentions = sum(sections_text_lower.count(tok) for tok in _ASSUMPTION_TOKENS)
     leak_hits = sum(sections_text_lower.count(p) for p in _LEAK_PHRASES)
+    hedging_hits = sum(sections_text_lower.count(p) for p in _HEDGING_PHRASES)
 
     tech_choices, tech_counts, tech_scope, tech_ignored = _tech_choices(markdown)
 
@@ -577,7 +589,7 @@ def _score_one_run(
     retries = sum(stat.get("retries") or 0 for stat in group_stats)
     retry_reason_counts = _retry_reason_counts(group_stats)
 
-    if version == "B":
+    if version in _VALIDATED_VERSIONS:
         decision_adherence, decision_adherence_strict, decision_adherence_in_designated_section = (
             _decision_adherence(body.get("decisions"), markdown)
         )
@@ -647,14 +659,16 @@ def _score_one_run(
         "non_ok_ids": flagged_ids + possible_ids,
         "validation_source": validation_source,
         "wording": wording,
-        "decisions": body.get("decisions") if version == "B" else None,
+        "decisions": body.get("decisions") if version in _VALIDATED_VERSIONS else None,
+        "hedging_hits": hedging_hits,
+        "writer_style": meta.get("writer_style") or "n/a",
     }
 
 
 _NUMERIC_METRIC_KEYS = (
     "sections_found", "fallback_lines", "design_warnings", "placeholder_hits", "jargon_hits",
-    "numeric_claims", "unsupported_numbers", "assumption_mentions", "leak_hits", "retries",
-    "design_prompt_tokens", "design_completion_tokens",
+    "numeric_claims", "unsupported_numbers", "assumption_mentions", "leak_hits", "hedging_hits",
+    "retries", "design_prompt_tokens", "design_completion_tokens",
     "elapsed_seconds", "jev_requests", "jev_input_tokens", "jev_output_tokens",
     "flagged_count", "possible_count",
 )
@@ -746,8 +760,8 @@ def score(
     for r in runs:
         by_idea_version.setdefault((r["idea"], r["version"]), []).append(r)
 
-    aggregate = {"A": {}, "B": {}}
-    for version in ("A", "B"):
+    aggregate = {version: {} for version in VERSIONS}
+    for version in VERSIONS:
         version_runs = [r for r in runs if r["version"] == version]
         aggregate[version]["n"] = len(version_runs)
         for key in _NUMERIC_METRIC_KEYS:
@@ -794,8 +808,9 @@ def score(
     ideas = sorted({r["idea"] for r in runs})
 
     repeatability = {
-        idea: _decision_repeatability(by_idea_version.get((idea, "B"), []))
+        (idea, version): _decision_repeatability(by_idea_version.get((idea, version), []))
         for idea in ideas
+        for version in _VALIDATED_VERSIONS
     }
 
     return {
@@ -824,7 +839,7 @@ def _fmt_consistency(value) -> str:
 
 def render_report(data: dict) -> str:
     lines = [
-        "# M6 eval report: version A (llm_only) vs version B (pipeline)",
+        "# M6 eval report: version A (llm_only) vs B (pipeline, hedged) vs B2 (pipeline, confident)",
         "",
         "Every metric below is computed deterministically by keyword/structure "
         "matching -- no model scored any of this.",
@@ -844,12 +859,12 @@ def render_report(data: dict) -> str:
         lines.append(f"### {idea}")
         lines.append("")
         lines.append("| version | repeat | sections_found | fallback_lines | warnings | "
-                      "placeholder_hits | jargon_hits | leak_hits | retries | decision_adherence | "
-                      "decision_adherence_strict | numeric_claims | unsupported_numbers | assumption_mentions | "
-                      "tech_choices (scope) | tech_counts | tech_ignored | jev_requests | non_ok_ids (source) | "
-                      "wording |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-        for version in ("A", "B"):
+                      "placeholder_hits | jargon_hits | leak_hits | hedging_hits | retries | "
+                      "decision_adherence | decision_adherence_strict | numeric_claims | "
+                      "unsupported_numbers | assumption_mentions | tech_choices (scope) | tech_counts | "
+                      "tech_ignored | jev_requests | non_ok_ids (source) | wording | writer_style |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for version in VERSIONS:
             for r in data["by_idea_version"].get((idea, version), []):
                 scope_abbrev = {"designated": "d", "fallback (1-12)": "f"}
                 tech = ", ".join(
@@ -869,50 +884,45 @@ def render_report(data: dict) -> str:
                 lines.append(
                     f"| {r['version']} | {r['repeat']} | {r['sections_found']} | {r['fallback_lines']} | "
                     f"{r['design_warnings']} | {r['placeholder_hits']} | {r['jargon_hits']} | "
-                    f"{r['leak_hits']} | {r['retries']} | {_fmt(r['decision_adherence'])} | "
-                    f"{_fmt(r['decision_adherence_strict'])} | "
+                    f"{r['leak_hits']} | {r['hedging_hits']} | {r['retries']} | "
+                    f"{_fmt(r['decision_adherence'])} | {_fmt(r['decision_adherence_strict'])} | "
                     f"{r['numeric_claims']} | {r['unsupported_numbers']} | {r['assumption_mentions']} | "
                     f"{tech} | {tech_counts} | {tech_ignored} | {r['jev_requests']} | {non_ok_str} | "
-                    f"{r['wording']} |"
+                    f"{r['wording']} | {r['writer_style']} |"
                 )
         lines.append("")
 
     lines.append("## Aggregate (mean, n shown)")
     lines.append("")
-    lines.append("| metric | A | B |")
-    lines.append("|---|---|---|")
-    lines.append(f"| n | {data['aggregate']['A']['n']} | {data['aggregate']['B']['n']} |")
+    lines.append("| metric | A | B | B2 |")
+    lines.append("|---|---|---|---|")
+    lines.append(
+        f"| n | {data['aggregate']['A']['n']} | {data['aggregate']['B']['n']} | "
+        f"{data['aggregate']['B2']['n']} |"
+    )
     for key in _NUMERIC_METRIC_KEYS:
-        a_val = _fmt(data["aggregate"]["A"].get(key, "n/a"))
-        b_val = _fmt(data["aggregate"]["B"].get(key, "n/a"))
-        lines.append(f"| {key} | {a_val} | {b_val} |")
-    lines.append(
-        f"| decision_adherence | n/a | {_fmt(data['aggregate']['B'].get('decision_adherence', 'n/a'))} |"
-    )
-    lines.append(
-        f"| decision_adherence_strict | n/a | "
-        f"{_fmt(data['aggregate']['B'].get('decision_adherence_strict', 'n/a'))} |"
-    )
-    lines.append(
-        f"| decision_adherence_in_designated_section | n/a | "
-        f"{_fmt(data['aggregate']['B'].get('decision_adherence_in_designated_section', 'n/a'))} |"
-    )
+        vals = " | ".join(_fmt(data["aggregate"][v].get(key, "n/a")) for v in VERSIONS)
+        lines.append(f"| {key} | {vals} |")
+    for key in ("decision_adherence", "decision_adherence_strict", "decision_adherence_in_designated_section"):
+        vals = " | ".join(_fmt(data["aggregate"][v].get(key, "n/a")) for v in VERSIONS)
+        lines.append(f"| {key} | {vals} |")
     lines.append("")
 
     lines.append("## Retry reasons (sum per category)")
     lines.append("")
-    all_categories = sorted(
-        set(data["aggregate"]["A"]["retry_reason_totals"]) | set(data["aggregate"]["B"]["retry_reason_totals"])
-    )
+    all_categories = sorted(set().union(
+        *(data["aggregate"][v]["retry_reason_totals"] for v in VERSIONS)
+    ))
     if not all_categories:
         lines.append("No retries were recorded.")
     else:
-        lines.append("| category | A | B |")
-        lines.append("|---|---|---|")
+        lines.append("| category | A | B | B2 |")
+        lines.append("|---|---|---|---|")
         for category in all_categories:
-            a_total = data["aggregate"]["A"]["retry_reason_totals"].get(category, 0)
-            b_total = data["aggregate"]["B"]["retry_reason_totals"].get(category, 0)
-            lines.append(f"| {category} | {a_total} | {b_total} |")
+            totals = " | ".join(
+                str(data["aggregate"][v]["retry_reason_totals"].get(category, 0)) for v in VERSIONS
+            )
+            lines.append(f"| {category} | {totals} |")
     lines.append("")
 
     lines.append("## Unsupported numbers")
@@ -945,32 +955,33 @@ def render_report(data: dict) -> str:
         lines.append(f"| {idea} | {version} | {_fmt_consistency(value)} |")
     lines.append("")
 
-    lines.append("## Jev decision repeatability (idea, >=2 B repeats)")
+    lines.append("## Jev decision repeatability (idea/version, >=2 repeats)")
     lines.append("")
     for idea in data["ideas"]:
-        rep = data["repeatability"].get(idea, "n/a")
-        lines.append(f"### {idea}")
-        lines.append("")
-        if rep == "n/a":
-            lines.append("n/a")
+        for version in _VALIDATED_VERSIONS:
+            rep = data["repeatability"].get((idea, version), "n/a")
+            lines.append(f"### {idea} ({version})")
             lines.append("")
-            continue
-        lines.append("| decision_id | choices (by repeat) | statuses (by repeat) | "
-                      "probabilities (by repeat) | match | status_match | abs_prob_diff |")
-        lines.append("|---|---|---|---|---|---|---|")
-        for row in rep["rows"]:
-            choices_str = ",".join(row["choices"])
-            statuses_str = ",".join(str(s) for s in row["statuses"])
-            probs_str = ",".join(f"{p:.2f}" for p in row["probabilities"])
+            if rep == "n/a":
+                lines.append("n/a")
+                lines.append("")
+                continue
+            lines.append("| decision_id | choices (by repeat) | statuses (by repeat) | "
+                          "probabilities (by repeat) | match | status_match | abs_prob_diff |")
+            lines.append("|---|---|---|---|---|---|---|")
+            for row in rep["rows"]:
+                choices_str = ",".join(row["choices"])
+                statuses_str = ",".join(str(s) for s in row["statuses"])
+                probs_str = ",".join(f"{p:.2f}" for p in row["probabilities"])
+                lines.append(
+                    f"| {row['id']} | {choices_str} | {statuses_str} | {probs_str} | "
+                    f"{row['match']} | {row['status_match']} | {row['abs_diff']:.2f} |"
+                )
             lines.append(
-                f"| {row['id']} | {choices_str} | {statuses_str} | {probs_str} | "
-                f"{row['match']} | {row['status_match']} | {row['abs_diff']:.2f} |"
+                f"agreement={_fmt(rep['agreement'])} status_agreement={_fmt(rep['status_agreement'])} "
+                f"mean_abs_prob_diff={_fmt(rep['mean_abs_diff'])}"
             )
-        lines.append(
-            f"agreement={_fmt(rep['agreement'])} status_agreement={_fmt(rep['status_agreement'])} "
-            f"mean_abs_prob_diff={_fmt(rep['mean_abs_diff'])}"
-        )
-        lines.append("")
+            lines.append("")
 
     lines.append("## Limitations")
     lines.append("")

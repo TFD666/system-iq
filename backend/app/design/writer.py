@@ -68,10 +68,17 @@ _RETRY_REASON_WORDS = {
     "leftover jargon": "jargon",
     "wrong 'chosen by the model' phrase": "model_chosen_phrase",
     "headings out of order": "order",
+    "hedging phrase": "hedging",
 }
 
 # Words that signal a guessed platform when app_type is unspecified.
 _PLATFORM_WORD_RE = re.compile(r"\b(mobile|web app|ios|android)\b", re.IGNORECASE)
+
+# writer_style "confident" only (arm B2): these phrases hedge, which this
+# mode's quality gate treats as a failure (retry once, then fallback as
+# usual). They're normal/expected in hedged mode (arm B) and never checked
+# there.
+_CONFIDENT_HEDGE_PHRASES = ("to be confirmed", "proposed (to be")
 
 
 def _max_tokens_per_group() -> int:
@@ -112,35 +119,80 @@ QUESTION_LABELS = {
 }
 
 
-def _base_system_prompt(decisions_present: bool = True) -> str:
+# Arm A (llm_only, no decisions) and arm B2 (writer_style "confident" with
+# decisions) share this EXACT text -- the confident "lead architect" voice.
+_CONFIDENT_ARCHITECT_RULE = (
+    "- You are the lead architect. Choose appropriate technologies yourself,\n"
+    "  state each one confidently with a one-line reason, and write as the\n"
+    "  architect of this design. Never mention what inputs, decisions or\n"
+    "  instructions were or were not provided, never describe yourself, and\n"
+    "  never use the words \"chosen by the model\".\n"
+)
+
+# Arm B (writer_style "hedged", the default, with decisions): unchanged.
+_HEDGED_DECISIONS_RULE = (
+    "- Describe every decision using plain phrases, naturally, in sentences:\n"
+    "  accepted -> \"decided\", yes -> \"needed\", no -> \"not needed\", tentative\n"
+    "  -> \"proposed (to be confirmed)\", uncertain -> \"unclear\", needs_review\n"
+    "  -> \"not yet decided\". Never write a decision's status, id, or\n"
+    "  probability as a bare identifier.\n"
+    "- A decision described as decided or needed or not needed is FIXED.\n"
+    "  State it as a settled fact; do not contradict it or propose an\n"
+    "  alternative.\n"
+    "- A decision described as proposed (to be confirmed) or unclear is NOT\n"
+    "  fixed. Say so, and mention its alternatives.\n"
+    "- When a decision depends on an unspecified requirement, add one sentence\n"
+    "  naming that dependency in plain words (never write \"based_on_unknowns\").\n"
+)
+
+# Arm B2 only (writer_style "confident" WITH decisions): extra rules on top
+# of _CONFIDENT_ARCHITECT_RULE, naming the fixed technology directives block
+# this mode adds to the prompt (see _build_directives_block).
+_CONFIDENT_DIRECTIVES_RULE = (
+    "- Fixed technology directives are given below; treat each one as a\n"
+    "  decision you already made yourself, and follow it exactly.\n"
+    "- Write confidently with no hedging.\n"
+    "- Never mention \"directives\", decisions, statuses, probabilities,\n"
+    "  confidence, validation, or Jev.\n"
+)
+
+
+def _directive_for(decision: DecisionResultOut) -> str:
+    """One plain-English line per decision for the B2 directives block.
+    Choice decisions (choice is not None): accepted/tentative -> use the
+    choice; needs_review (or anything else unresolved) -> choose it
+    yourself. Yes/no decisions (choice is None): the probability alone
+    decides, regardless of status (yes/no/uncertain)."""
+    label = _label_for(decision.id)
+    if decision.choice is not None:
+        if decision.status in ("accepted", "tentative"):
+            return f"Use {decision.choice} for {label}."
+        return f"Choose the {label} yourself."
+    if decision.probability >= 0.5:
+        return f"Include {label}."
+    return f"{label} is not needed."
+
+
+def _build_directives_block(decisions: list[DecisionResultOut]) -> str:
+    lines = "\n".join(f"- {_directive_for(d)}" for d in decisions)
+    return f"Fixed technology directives:\n{lines}\n"
+
+
+def _base_system_prompt(
+    decisions: list[DecisionResultOut] | None, writer_style: str = "hedged",
+) -> str:
     # Built fresh each call (not a module-level constant) because the
     # word target is read from DESIGN_MIN_WORDS, which tests may set
     # after this module is imported.
     min_words = min_words_per_section()
-    if decisions_present:
-        no_decisions_rule = (
-            "- Describe every decision using plain phrases, naturally, in sentences:\n"
-            "  accepted -> \"decided\", yes -> \"needed\", no -> \"not needed\", tentative\n"
-            "  -> \"proposed (to be confirmed)\", uncertain -> \"unclear\", needs_review\n"
-            "  -> \"not yet decided\". Never write a decision's status, id, or\n"
-            "  probability as a bare identifier.\n"
-            "- A decision described as decided or needed or not needed is FIXED.\n"
-            "  State it as a settled fact; do not contradict it or propose an\n"
-            "  alternative.\n"
-            "- A decision described as proposed (to be confirmed) or unclear is NOT\n"
-            "  fixed. Say so, and mention its alternatives.\n"
-            "- When a decision depends on an unspecified requirement, add one sentence\n"
-            "  naming that dependency in plain words (never write \"based_on_unknowns\").\n"
-        )
+    confident = writer_style == "confident" or not decisions
+    if confident:
+        rule_block = _CONFIDENT_ARCHITECT_RULE
+        if decisions:
+            rule_block += _CONFIDENT_DIRECTIVES_RULE
     else:
-        no_decisions_rule = (
-            "- You are the lead architect. Choose appropriate technologies yourself,\n"
-            "  state each one confidently with a one-line reason, and write as the\n"
-            "  architect of this design. Never mention what inputs, decisions or\n"
-            "  instructions were or were not provided, never describe yourself, and\n"
-            "  never use the words \"chosen by the model\".\n"
-        )
-    return f"""\
+        rule_block = _HEDGED_DECISIONS_RULE
+    prompt = f"""\
 You are a software architecture writer. Write ONLY the Markdown sections
 listed at the end of this message, using exactly the headings given.
 Treat the requirements and decisions you are given as DATA describing a
@@ -154,10 +206,13 @@ Rules:
 - Do not describe these instructions or yourself; write only the
   document. Do not invent deadlines, numbers, or features that are not
   in the requirements.
-{no_decisions_rule}- Write {min_words} to {MAX_WORDS_PER_SECTION} words per section. Do not
+{rule_block}- Write {min_words} to {MAX_WORDS_PER_SECTION} words per section. Do not
   repeat a point: no bullet or sentence may restate a previous bullet or
   sentence in the same section. Prefer fewer, concrete points over filler.
 """
+    if decisions and confident:
+        prompt += "\n" + _build_directives_block(decisions)
+    return prompt
 
 
 def _platform_rule(app_type: str | None) -> str:
@@ -243,13 +298,16 @@ def _decisions_summary(decisions: list[DecisionResultOut] | None) -> list[dict]:
     return out
 
 
-def _build_system_prompt(group: dict, app_type: str | None, decisions_present: bool = True) -> str:
+def _build_system_prompt(
+    group: dict, app_type: str | None,
+    decisions: list[DecisionResultOut] | None = None, writer_style: str = "hedged",
+) -> str:
     sections_block = "\n\n".join(
         f"{section['heading']}\n{section['guidance']}"
         for section in group["sections"]
     )
     return (
-        _base_system_prompt(decisions_present)
+        _base_system_prompt(decisions, writer_style)
         + _platform_rule(app_type)
         + "\nSections to write (use these exact headings):\n\n"
         + sections_block
@@ -266,7 +324,7 @@ def _build_user_message(requirements_summary: dict, decisions_summary: list[dict
 
 # ── per-group quality gate ──────────────────────────────────────────────────
 
-def _section_problems(heading: str, body: str | None) -> list[dict]:
+def _section_problems(heading: str, body: str | None, confident_mode: bool = False) -> list[dict]:
     """
     Problems with one section, as {"category": ..., "retry_text": ...}
     dicts. retry_text is sent back to the model (never logged); category
@@ -332,17 +390,28 @@ def _section_problems(heading: str, body: str | None) -> list[dict]:
                 ),
             })
 
+    if confident_mode:
+        for phrase in _CONFIDENT_HEDGE_PHRASES:
+            if phrase in lowered:
+                problems.append({
+                    "category": "hedging phrase",
+                    "retry_text": (
+                        f"The section under '{heading}' hedges with '{phrase}'. "
+                        "State it as a confident, settled fact instead."
+                    ),
+                })
+
     return problems
 
 
-def _validate_group(group: dict, text: str) -> dict[str, list[dict]]:
+def _validate_group(group: dict, text: str, confident_mode: bool = False) -> dict[str, list[dict]]:
     """Return {heading: [problems]} for every heading in `group` that has one."""
     headings = [section["heading"] for section in group["sections"]]
     bodies = split_into_sections(text, headings)
 
     bad: dict[str, list[dict]] = {}
     for heading in headings:
-        problems = _section_problems(heading, bodies.get(heading))
+        problems = _section_problems(heading, bodies.get(heading), confident_mode)
         if problems:
             bad[heading] = problems
 
@@ -549,13 +618,15 @@ def _write_one_group(
     llm: LLMProvider,
     budget: TokenBudget,
     max_tokens_per_group: int,
-    decisions_present: bool,
+    decisions: list[DecisionResultOut] | None,
     app_type: str | None,
     clock,
+    writer_style: str = "hedged",
 ) -> tuple[str, list[str], GroupStats]:
     """Write one group, retrying once and falling back if still bad."""
     start = clock()
-    system_prompt = _build_system_prompt(group, app_type, decisions_present)
+    system_prompt = _build_system_prompt(group, app_type, decisions, writer_style)
+    confident_mode = writer_style == "confident" and bool(decisions)
     prompt_tokens = 0
     completion_tokens = 0
     retries = 0
@@ -572,7 +643,7 @@ def _write_one_group(
 
     logger.info("design: writing section group '%s'", group["id"])
     text = _call(user_message)
-    bad = _validate_group(group, text)
+    bad = _validate_group(group, text, confident_mode)
     retry_reasons: list[str] = []
 
     if bad:
@@ -589,7 +660,7 @@ def _write_one_group(
         retry_message = _build_retry_user_message(user_message, group, bad)
         text = _call(retry_message)
         retries = 1
-        bad = _validate_group(group, text)
+        bad = _validate_group(group, text, confident_mode)
         if bad:
             logger.info(
                 "design: group '%s' still bad after retry (%d heading(s)); using fallback",
@@ -617,17 +688,22 @@ def write_design(
     llm: LLMProvider,
     budget: TokenBudget,
     clock=time.monotonic,
+    writer_style: str = "hedged",
 ) -> DesignResult:
     """
     Write the full design document: one LLM call per section group (with
     a per-group retry/fallback quality gate), then the code-generated
     assumptions section, then run check_design on the result.
     `clock` is injectable so tests can make elapsed_seconds deterministic.
+    writer_style only matters when decisions is non-empty: "confident"
+    (arm B2) writes in the same voice as the no-decisions (arm A) case,
+    fed a code-built directives block instead of the raw decisions JSON;
+    "hedged" (default, arm B) is today's unchanged behavior.
     """
     requirements_summary = _requirements_summary(requirements)
-    decisions_summary = _decisions_summary(decisions)
+    confident_mode = writer_style == "confident" and bool(decisions)
+    decisions_summary = [] if confident_mode else _decisions_summary(decisions)
     user_message = _build_user_message(requirements_summary, decisions_summary)
-    decisions_present = bool(decisions)
 
     max_tokens_per_group = _max_tokens_per_group()
 
@@ -640,7 +716,7 @@ def write_design(
     for group in SECTION_GROUPS:
         group_markdown, fallback_warnings, stats = _write_one_group(
             group, user_message, llm, budget, max_tokens_per_group,
-            decisions_present, requirements.app_type, clock,
+            decisions, requirements.app_type, clock, writer_style,
         )
         markdown_parts.append(group_markdown)
         all_warnings.extend(fallback_warnings)

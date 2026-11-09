@@ -430,7 +430,9 @@ def design(
 
     # ── Step 5: write the design document (stage == "design") ───────────────
     try:
-        design_result = write_design(requirements, decision_results, llm, TokenBudget())
+        design_result = write_design(
+            requirements, decision_results, llm, TokenBudget(), writer_style=request.writer_style,
+        )
 
     except RateLimitError:
         return JSONResponse(
@@ -462,6 +464,7 @@ def design(
         )
 
     meta_kwargs["llm_model"] = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    meta_kwargs["writer_style"] = request.writer_style
     meta_kwargs["design_prompt_tokens"] = design_result.prompt_tokens
     meta_kwargs["design_completion_tokens"] = design_result.completion_tokens
     meta_kwargs["design_group_stats"] = [

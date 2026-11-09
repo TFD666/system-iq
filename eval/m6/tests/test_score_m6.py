@@ -690,6 +690,87 @@ def _b_meta() -> dict:
     return {"decision_model": "x", "validation_model": "x", "validation_input_tokens": 1, "validation_status": "flagged"}
 
 
+def test_b2_is_scored_like_b_with_its_own_writer_style_and_adherence():
+    markdown = _headings_markdown({4: "We use REST for the API."})
+    decisions = [{"id": "api_style", "status": "accepted", "choice": "REST", "probability": 0.9}]
+    meta = {**_b_meta(), "writer_style": "confident"}
+    body = {
+        "design_markdown": markdown, "design_warnings": [], "meta": meta, "requirements": {},
+        "decisions": decisions, "validation": [],
+    }
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "B2", "repeat": 1}, "")
+
+    assert result["decision_adherence"] == 1.0
+    assert result["writer_style"] == "confident"
+    assert result["jev_requests"] == 1
+
+
+def test_writer_style_is_n_a_for_version_a():
+    markdown = _headings_markdown({})
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    assert result["writer_style"] == "n/a"
+
+
+def test_hedging_hits_counts_the_configured_phrases_in_sections_1_to_12():
+    markdown = _headings_markdown({
+        1: "This is tentative and pending review.",
+        2: "Still proposed, not yet decided, and unclear.",
+        13: "This mentions tentative too.",  # section 13 -- must not count
+    }, include_13=True)
+    body = {"design_markdown": markdown, "design_warnings": [], "meta": {}, "requirements": {}}
+    result = sm._score_one_run("x", body, {"idea": "x", "version": "A", "repeat": 1}, "")
+    # tentative, pending, proposed, not yet decided, unclear = 5 (section 13 excluded)
+    assert result["hedging_hits"] == 5
+
+
+def test_b2_scored_separately_from_b_in_aggregate_and_report(_env):
+    ideas_dir, runs_dir = _env
+    b_body = {
+        "design_markdown": _headings_markdown({}), "design_warnings": [], "requirements": {},
+        "meta": _b_meta(), "decisions": [], "validation": [],
+    }
+    b2_body = {
+        "design_markdown": _headings_markdown({1: "The design states this clearly."}),
+        "design_warnings": [], "requirements": {},
+        "meta": {**_b_meta(), "writer_style": "confident"}, "decisions": [], "validation": [],
+    }
+    _write_run(runs_dir, "idea1__B__r1", {"idea": "idea1", "version": "B", "repeat": 1}, b_body)
+    _write_run(runs_dir, "idea1__B2__r1", {"idea": "idea1", "version": "B2", "repeat": 1}, b2_body)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
+
+    assert data["aggregate"]["B"]["n"] == 1
+    assert data["aggregate"]["B2"]["n"] == 1
+
+    report = sm.render_report(data)
+    assert "| metric | A | B | B2 |" in report
+    assert report.isascii()
+
+
+def test_repeatability_is_computed_separately_for_b_and_b2(_env):
+    ideas_dir, runs_dir = _env
+    decisions_r1 = [{"id": "api_style", "status": "accepted", "choice": "REST", "probability": 0.8}]
+    decisions_r2 = [{"id": "api_style", "status": "accepted", "choice": "GraphQL", "probability": 0.8}]
+    b_body_1 = {
+        "design_markdown": _headings_markdown({}), "design_warnings": [], "requirements": {}, "meta": _b_meta(),
+        "decisions": decisions_r1, "validation": [],
+    }
+    b_body_2 = {**b_body_1, "decisions": decisions_r1}  # B repeats agree
+    b2_meta = {**_b_meta(), "writer_style": "confident"}
+    b2_body_1 = {**b_body_1, "meta": b2_meta, "decisions": decisions_r1}
+    b2_body_2 = {**b_body_1, "meta": b2_meta, "decisions": decisions_r2}  # B2 repeats disagree
+    _write_run(runs_dir, "idea1__B__r1", {"idea": "idea1", "version": "B", "repeat": 1}, b_body_1)
+    _write_run(runs_dir, "idea1__B__r2", {"idea": "idea1", "version": "B", "repeat": 2}, b_body_2)
+    _write_run(runs_dir, "idea1__B2__r1", {"idea": "idea1", "version": "B2", "repeat": 1}, b2_body_1)
+    _write_run(runs_dir, "idea1__B2__r2", {"idea": "idea1", "version": "B2", "repeat": 2}, b2_body_2)
+
+    data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
+
+    assert data["repeatability"][("idea1", "B")]["agreement"] == 1.0
+    assert data["repeatability"][("idea1", "B2")]["agreement"] == 0.0
+
+
 def test_repeatability_is_n_a_with_only_one_b_repeat(_env):
     ideas_dir, runs_dir = _env
     body = {
@@ -701,7 +782,9 @@ def test_repeatability_is_n_a_with_only_one_b_repeat(_env):
 
     data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
 
-    assert data["repeatability"]["idea1"] == "n/a"
+    # repeatability is keyed by (idea, version) now that B2 is a separate
+    # version with its own repeatability table.
+    assert data["repeatability"][("idea1", "B")] == "n/a"
 
 
 def test_repeatability_table_reports_match_and_mismatch_across_repeats(_env):
@@ -723,7 +806,7 @@ def test_repeatability_table_reports_match_and_mismatch_across_repeats(_env):
     _write_run(runs_dir, "idea1__B__r2", {"idea": "idea1", "version": "B", "repeat": 2}, body_2)
 
     data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
-    rep = data["repeatability"]["idea1"]
+    rep = data["repeatability"][("idea1", "B")]
 
     by_id = {row["id"]: row for row in rep["rows"]}
     assert by_id["api_style"]["match"] is True
@@ -750,7 +833,7 @@ def test_repeatability_includes_non_accepted_decisions_and_flags_a_status_flip(_
     _write_run(runs_dir, "idea1__B__r2", {"idea": "idea1", "version": "B", "repeat": 2}, body_2)
 
     data = sm.score(ideas_dir=ideas_dir, runs_dir=runs_dir, revalidation_dir=ideas_dir / "no_such")
-    row = data["repeatability"]["idea1"]["rows"][0]
+    row = data["repeatability"][("idea1", "B")]["rows"][0]
 
     assert row["id"] == "auth_approach"
     assert row["match"] is True  # same choice both times

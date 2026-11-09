@@ -143,7 +143,6 @@ def revise_sections(
     issue_lines = [_issue_statement(r, decisions) for r in flagged_results]
     decisions_summary = _decisions_summary(decisions)
     requirements_summary = _requirements_summary(requirements)
-    decisions_present = bool(decisions)
     max_tokens = _max_tokens_per_group()
 
     revised: set[int] = set()
@@ -167,7 +166,7 @@ def revise_sections(
             + "\nWrite ALL of these headings again, in full, in this exact order:\n"
             + "\n".join(chunk_headings)
         )
-        system_prompt = _build_system_prompt(pseudo_group, requirements.app_type, decisions_present)
+        system_prompt = _build_system_prompt(pseudo_group, requirements.app_type, decisions)
 
         def _call(message: str) -> str:
             estimated_total = (len(system_prompt) + len(message)) // 4 + max_tokens

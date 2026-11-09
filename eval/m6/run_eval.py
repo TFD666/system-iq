@@ -4,7 +4,9 @@ POST /design and save the raw response to eval/m6/runs/<id>.json plus a
 small <id>.meta.json (idea, version, repeat, start/end time, seconds).
 
 Version A = mode llm_only, stage "design" (no Jev call at all).
-Version B = mode pipeline, stage "validate", max_revisions 0.
+Version B = mode pipeline, stage "validate", max_revisions 0, writer_style
+"hedged" (the default).
+Version B2 = same as B, but writer_style "confident".
 
 Real network calls on purpose (this is the eval harness, not a test) --
 --max-runs and --sleep exist specifically to keep that bounded and polite.
@@ -43,7 +45,10 @@ def _read_text_bom(path: Path) -> str:
 def _build_request_body(idea_text: str, version: str) -> dict:
     if version == "A":
         return {"idea": idea_text, "stage": "design", "mode": "llm_only", "max_revisions": 0}
-    return {"idea": idea_text, "stage": "validate", "mode": "pipeline", "max_revisions": 0}
+    body = {"idea": idea_text, "stage": "validate", "mode": "pipeline", "max_revisions": 0}
+    if version == "B2":
+        body["writer_style"] = "confident"
+    return body
 
 
 def _check_real_run(version: str, meta: dict) -> str | None:
@@ -67,6 +72,8 @@ def _check_real_run(version: str, meta: dict) -> str | None:
         return "validation_input_tokens is 0 or missing"
     if meta.get("validation_status") == "skipped":
         return "validation_status is skipped"
+    if version == "B2" and meta.get("writer_style") != "confident":
+        return f"writer_style is {meta.get('writer_style')!r}, not 'confident'"
     return None
 
 
@@ -100,7 +107,7 @@ def main() -> None:
     parser.add_argument("--api-url", default="http://localhost:8000")
     parser.add_argument("--max-runs", type=int, default=4, help="Max real requests this run.")
     parser.add_argument("--only-idea", default=None, help="Comma-separated idea file stems to run.")
-    parser.add_argument("--only-version", choices=["A", "B"], default=None)
+    parser.add_argument("--only-version", choices=["A", "B", "B2"], default=None)
     parser.add_argument("--repeats", type=int, default=1, help="Repeats per (idea, version).")
     parser.add_argument("--sleep", type=float, default=10.0, help="Seconds between requests.")
     parser.add_argument("--force", action="store_true", help="Re-run jobs that already have a result.")

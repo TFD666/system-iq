@@ -680,6 +680,119 @@ def test_assumptions_section_llm_only_lists_unspecified_fields_and_unknowns():
     assert "### Unclear" not in section
 
 
+# ── writer_style "confident" (arm B2) ───────────────────────────────────────
+
+def test_directive_for_choice_accepted_and_tentative_use_the_choice():
+    accepted = _make_decision(id="primary_database", status="accepted", choice="PostgreSQL")
+    tentative = _make_decision(id="api_style", status="tentative", choice="REST")
+    assert writer_module._directive_for(accepted) == "Use PostgreSQL for Primary database."
+    assert writer_module._directive_for(tentative) == "Use REST for API style."
+
+
+def test_directive_for_needs_review_choice_says_choose_yourself():
+    # A needs_review choice-type decision still carries a top choice
+    # candidate in real Jev output, even though it's unresolved.
+    decision = _make_decision(id="media_storage_approach", status="needs_review", choice="S3")
+    assert writer_module._directive_for(decision) == "Choose the Media storage yourself."
+
+
+def test_directive_for_yes_no_at_probability_thresholds():
+    include = _make_decision(id="cache_needed", status="yes", choice=None, probability=0.50)
+    exclude = _make_decision(id="cache_needed", status="no", choice=None, probability=0.49)
+    assert writer_module._directive_for(include) == "Include Caching."
+    assert writer_module._directive_for(exclude) == "Caching is not needed."
+
+
+def test_directive_for_yes_no_uncertain_status_still_uses_probability():
+    # Status label is ignored for yes/no decisions -- only the probability
+    # decides, per the spec ("the probability alone decides").
+    uncertain = _make_decision(id="cache_needed", status="uncertain", choice=None, probability=0.6)
+    assert writer_module._directive_for(uncertain) == "Include Caching."
+
+
+def test_confident_architect_text_is_byte_identical_in_arm_a_and_b2():
+    # The shared constant: arm A (no decisions) and arm B2 (confident,
+    # decisions present) must use the exact same architect-voice text.
+    fake_a = FakeLLM()
+    write_design(_make_requirements(), decisions=None, llm=fake_a, budget=_no_wait_budget())
+
+    decision = _make_decision(status="accepted", choice="PostgreSQL")
+    fake_b2 = FakeLLM()
+    write_design(
+        _make_requirements(), decisions=[decision], llm=fake_b2, budget=_no_wait_budget(),
+        writer_style="confident",
+    )
+
+    assert writer_module._CONFIDENT_ARCHITECT_RULE in fake_a.calls[0]["system"]
+    assert writer_module._CONFIDENT_ARCHITECT_RULE in fake_b2.calls[0]["system"]
+
+
+def test_default_writer_style_leaves_old_hedged_output_unchanged():
+    decision = _make_decision(status="accepted", choice="PostgreSQL")
+    fake_default = FakeLLM()
+    write_design(_make_requirements(), decisions=[decision], llm=fake_default, budget=_no_wait_budget())
+
+    fake_explicit = FakeLLM()
+    write_design(
+        _make_requirements(), decisions=[decision], llm=fake_explicit, budget=_no_wait_budget(),
+        writer_style="hedged",
+    )
+
+    assert fake_default.calls[0]["system"] == fake_explicit.calls[0]["system"]
+    assert fake_default.calls[0]["user"] == fake_explicit.calls[0]["user"]
+
+
+def test_confident_mode_prompt_has_directives_and_hides_raw_decision_data():
+    decision = _make_decision(id="primary_database", status="accepted", choice="PostgreSQL", probability=0.9)
+    fake_llm = FakeLLM()
+    write_design(
+        _make_requirements(), decisions=[decision], llm=fake_llm, budget=_no_wait_budget(),
+        writer_style="confident",
+    )
+    call = fake_llm.calls[0]
+    assert "Fixed technology directives:" in call["system"]
+    assert "Use PostgreSQL for Primary database." in call["system"]
+    assert "never mention" in call["system"].lower()
+    assert '"status": "accepted"' not in call["user"]  # no raw decision JSON leaked
+    assert "0.9" not in call["user"]
+
+
+def test_hedging_phrase_triggers_retry_only_in_confident_mode():
+    decision = _make_decision(status="accepted", choice="PostgreSQL")
+    first_try = "\n\n".join([
+        _long_enough_body("## 1. Test Heading One") + " proposed (to be revisited) soon",
+        _long_enough_body("## 2. Test Heading Two"),
+    ])
+    second_try = "\n\n".join(
+        _long_enough_body(h) for h in ["## 1. Test Heading One", "## 2. Test Heading Two"]
+    )
+    llm = ScriptedLLM([first_try, second_try])
+
+    markdown, warnings, stats = writer_module._write_one_group(
+        _TEST_GROUP, "user message", llm, _group_budget(), 700, [decision], None, lambda: 0.0, "confident",
+    )
+
+    assert len(llm.calls) == 2  # exactly one retry
+    assert stats.retry_reasons == ["hedging"]
+    assert warnings == []
+
+
+def test_hedging_phrase_is_not_flagged_in_hedged_mode():
+    # Same phrase is normal/expected wording in hedged mode -- never checked there.
+    body = "\n\n".join([
+        _long_enough_body("## 1. Test Heading One") + " proposed (to be confirmed)",
+        _long_enough_body("## 2. Test Heading Two"),
+    ])
+    llm = ScriptedLLM([body])
+
+    markdown, warnings, stats = writer_module._write_one_group(
+        _TEST_GROUP, "user message", llm, _group_budget(), 700, True, None, lambda: 0.0,
+    )
+
+    assert len(llm.calls) == 1  # no retry
+    assert stats.retries == 0
+
+
 def test_no_idea_text_or_design_text_in_logs(caplog):
     requirements = _make_requirements(
         project_summary="A to-do app for small teams.",

@@ -31,19 +31,22 @@ def _a_body(llm_model="qwen/qwen3-27b", group_stats=None):
 
 
 def _b_body(decision_model="jev-1.13-free", validation_model="jev-1.13-free",
-            validation_input_tokens=10, validation_status="flagged"):
+            validation_input_tokens=10, validation_status="flagged", writer_style=None):
+    meta = {
+        "decision_model": decision_model,
+        "validation_model": validation_model,
+        "validation_input_tokens": validation_input_tokens,
+        "validation_status": validation_status,
+        "validation_calls": 1,
+    }
+    if writer_style is not None:
+        meta["writer_style"] = writer_style
     return {
         "stage": "validated",
         "design_markdown": "## 1. Architecture overview\n\ntext",
         "design_warnings": [],
         "validation": [],
-        "meta": {
-            "decision_model": decision_model,
-            "validation_model": validation_model,
-            "validation_input_tokens": validation_input_tokens,
-            "validation_status": validation_status,
-            "validation_calls": 1,
-        },
+        "meta": meta,
     }
 
 
@@ -178,6 +181,60 @@ def test_never_retries_a_429(_env, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "transient upstream error" not in out
     assert "HTTP 429" in out
+
+
+def test_b2_request_sets_writer_style_confident(_env, monkeypatch):
+    ideas_dir, _runs_dir = _env
+    captured = []
+
+    def capture_post(url, *, json, **kwargs):
+        captured.append(json)
+        return _FakeResponse(200, _b_body(writer_style="confident"))
+
+    with patch("run_eval.httpx.post", side_effect=capture_post):
+        _run(["--ideas-dir", str(ideas_dir), "--only-idea", "idea1", "--only-version", "B2", "--max-runs", "5"], monkeypatch)
+
+    assert len(captured) == 1
+    req = captured[0]
+    assert req["mode"] == "pipeline"
+    assert req["stage"] == "validate"
+    assert req["max_revisions"] == 0
+    assert req["writer_style"] == "confident"
+
+
+def test_b_request_never_sets_writer_style(_env, monkeypatch):
+    ideas_dir, _runs_dir = _env
+    captured = []
+
+    def capture_post(url, *, json, **kwargs):
+        captured.append(json)
+        return _FakeResponse(200, _b_body())
+
+    with patch("run_eval.httpx.post", side_effect=capture_post):
+        _run(["--ideas-dir", str(ideas_dir), "--only-idea", "idea1", "--only-version", "B", "--max-runs", "5"], monkeypatch)
+
+    assert "writer_style" not in captured[0]
+
+
+def test_b2_run_rejected_when_writer_style_is_not_confident(_env, monkeypatch, capsys):
+    ideas_dir, runs_dir = _env
+    with patch("run_eval.httpx.post", return_value=_FakeResponse(200, _b_body(writer_style="hedged"))):
+        _run(["--ideas-dir", str(ideas_dir), "--only-idea", "idea1", "--only-version", "B2", "--max-runs", "5"], monkeypatch)
+
+    assert not (runs_dir / "idea1__B2__r1.json").exists()
+    out = capsys.readouterr().out
+    assert "not a real run" in out
+    assert "writer_style" in out
+
+
+def test_saves_real_b2_run_with_meta(_env, monkeypatch):
+    ideas_dir, runs_dir = _env
+    with patch("run_eval.httpx.post", return_value=_FakeResponse(200, _b_body(writer_style="confident"))):
+        _run(["--ideas-dir", str(ideas_dir), "--only-idea", "idea1", "--only-version", "B2", "--max-runs", "5"], monkeypatch)
+
+    assert (runs_dir / "idea1__B2__r1.json").exists()
+    meta = json.loads((runs_dir / "idea1__B2__r1.meta.json").read_text(encoding="utf-8"))
+    assert meta["version"] == "B2"
 
 
 def test_saves_real_a_and_b_runs_with_meta(_env, monkeypatch):

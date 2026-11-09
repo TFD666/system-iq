@@ -40,6 +40,11 @@ class DesignRequest(BaseModel):
     # "llm_only": extraction -> design with no decisions at all (no Jev call),
     # used as a baseline. Always stops at stage "designed" regardless of `stage`.
     mode: Literal["pipeline", "llm_only"] = "pipeline"
+    # Only matters when decisions are provided (mode "pipeline"): "hedged"
+    # (default) writes decisions with visible uncertainty; "confident"
+    # writes in the same confident architect voice as the llm_only mode,
+    # given the decisions as fixed directives instead.
+    writer_style: Literal["hedged", "confident"] = "hedged"
 
 
 class ExpectedScale(BaseModel):
@@ -232,6 +237,10 @@ class DecisionMeta(BaseModel):
     # decision_model is fixed to "n/a (validation only)" for /validate, so
     # this is what callers must check to tell a real Jev run from fake/replay.
     validation_model: str | None = None
+    # Set to the request's writer_style when decisions were provided and a
+    # design was written ("hedged" or "confident"); None otherwise (e.g.
+    # the llm_only baseline, or stage == "decide").
+    writer_style: str | None = None
 
 
 class DesignResponse(BaseModel):
