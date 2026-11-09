@@ -1,0 +1,245 @@
+{
+  "stage": "validated",
+  "requirements": {
+    "project_summary": "A mobile to-do application supporting offline functionality, cross-device synchronization, and family list sharing.",
+    "app_type": null,
+    "core_features": [
+      "Create and manage to-do lists",
+      "Works offline on phones",
+      "Syncs across devices when online",
+      "Share lists with family members"
+    ],
+    "user_roles": [
+      "User",
+      "Family Member"
+    ],
+    "expected_scale": {
+      "users": "10,000",
+      "peak_requests_per_second": null,
+      "data_volume": null
+    },
+    "realtime": null,
+    "geospatial": null,
+    "authentication": null,
+    "search_filtering": null,
+    "media_storage": null,
+    "payments": null,
+    "offline_support": true,
+    "external_integrations": [],
+    "constraints": [],
+    "assumptions": [
+      "User authentication required to link accounts for device sync and list sharing",
+      "Server-side storage for synced data and list permissions"
+    ],
+    "unknowns": [
+      "app_type not specified",
+      "realtime not specified",
+      "geospatial not specified",
+      "authentication not specified",
+      "search_filtering not specified",
+      "media_storage not specified",
+      "payments not specified"
+    ],
+    "evidence": {
+      "offline_support": "works offline on phones"
+    }
+  },
+  "decisions": [
+    {
+      "id": "api_style",
+      "question": "Which API communication style best fits this project's needs?",
+      "status": "accepted",
+      "choice": "REST",
+      "probability": 0.97,
+      "top_alternatives": [
+        {
+          "option": "REST",
+          "probability": 0.97
+        },
+        {
+          "option": "GraphQL",
+          "probability": 0.03
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "primary_database",
+      "question": "Which database best suits the data storage needs of this project?",
+      "status": "tentative",
+      "choice": "PostgreSQL",
+      "probability": 0.58,
+      "top_alternatives": [
+        {
+          "option": "PostgreSQL",
+          "probability": 0.58
+        },
+        {
+          "option": "MongoDB",
+          "probability": 0.31
+        }
+      ],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "architecture_style",
+      "question": "Which architecture style is most appropriate for this project's scale?",
+      "status": "tentative",
+      "choice": "modular monolith",
+      "probability": 0.57,
+      "top_alternatives": [
+        {
+          "option": "modular monolith",
+          "probability": 0.57
+        },
+        {
+          "option": "monolith",
+          "probability": 0.43
+        }
+      ],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "cache_needed",
+      "question": "Does this project need a caching layer to meet its performance requirements?",
+      "status": "uncertain",
+      "choice": null,
+      "probability": 0.27,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    },
+    {
+      "id": "async_processing_needed",
+      "question": "Does this project need asynchronous or background job processing?",
+      "status": "uncertain",
+      "choice": null,
+      "probability": 0.67,
+      "top_alternatives": [],
+      "based_on_unknowns": true
+    },
+    {
+      "id": "horizontal_scaling_needed",
+      "question": "Does this project need horizontal scaling to handle its expected load?",
+      "status": "no",
+      "choice": null,
+      "probability": 0.25,
+      "top_alternatives": [],
+      "based_on_unknowns": false
+    }
+  ],
+  "meta": {
+    "decision_model": "jev-1.13-free",
+    "input_tokens": 749,
+    "output_tokens": 188,
+    "decision_billing": "free",
+    "decision_cost": 0.0,
+    "llm_model": "qwen/qwen3.8-27b",
+    "design_prompt_tokens": 5834,
+    "design_completion_tokens": 1137,
+    "design_group_stats": [
+      {
+        "id": "g1",
+        "prompt_tokens": 1456,
+        "completion_tokens": 327,
+        "retries": 0,
+        "elapsed_seconds": 1.031,
+        "retry_reasons": []
+      },
+      {
+        "id": "g2",
+        "prompt_tokens": 1427,
+        "completion_tokens": 199,
+        "retries": 0,
+        "elapsed_seconds": 60.719,
+        "retry_reasons": []
+      },
+      {
+        "id": "g3",
+        "prompt_tokens": 1495,
+        "completion_tokens": 309,
+        "retries": 0,
+        "elapsed_seconds": 61.0,
+        "retry_reasons": []
+      },
+      {
+        "id": "g4",
+        "prompt_tokens": 1456,
+        "completion_tokens": 302,
+        "retries": 0,
+        "elapsed_seconds": 60.906,
+        "retry_reasons": []
+      }
+    ],
+    "validation_calls": 1,
+    "validation_input_tokens": 2126,
+    "validation_output_tokens": 145,
+    "validation_status": "passed",
+    "validation_model": "jev-1.13-free"
+  },
+  "design_markdown": "## 1. Architecture overview\nThe system uses a modular monolith approach, a proposal to be confirmed over a standard monolith. This style suits the single-team scope of a to-do application serving 10,000 users. Horizontal scaling is not needed, allowing a focused deployment. The main building blocks are a client application for offline-first interaction and a server-side module handling authentication, synchronization, and sharing permissions. These components work together to ensure data consistency across devices whenever network connectivity is available.\n\n## 2. Components and responsibilities\n- **Client Application:** Manages local offline storage, tracks to-do list state, and detects network availability to trigger sync operations.\n- **Authentication Service:** Verifies user and family member identities to securely link accounts and validate access to shared resources.\n- **Sync Engine:** Reconciles local changes with server data, resolving conflicts to maintain a consistent view of lists across all connected devices.\n- **Sharing Module:** Controls permissions for list access, ensuring family members can only view or modify lists they are explicitly authorized to share.\n\n## 3. Data flow\nA user modifies a to-do item in the client application, which saves the change locally for immediate offline availability. When connectivity is detected, the client sends the update to the server via a REST API. The server authenticates the request, checks sharing permissions, and writes the new state to the primary database. PostgreSQL is proposed (to be confirmed) as the primary store, with MongoDB as an alternative. Upon successful persistence, the server confirms the sync, allowing other family devices to retrieve the latest version.\n\n## 4. API architecture\nThe system will use a REST API. This style is a decided choice because it fits the straightforward retrieval and modification of to-do lists and user accounts. Main endpoints will handle creating and listing tasks, managing user profiles, and assigning sharing permissions for family members. JSON will be the standard format for request and response bodies. Specific details for error handling syntax are not yet decided, as the broader architecture is proposed (to be confirmed).\n\n## 5. Database architecture and data model\nThe primary database is proposed (to be confirmed) as PostgreSQL, with MongoDB listed as an alternative. It must store core entities including Users, Lists, and Tasks. Relationships involve links between users and the lists they own or access, connecting lists to their constituent tasks, and mapping permissions for family members. Indexing or partitioning is not needed at this time, as the expected scale of 10,000 users does not currently suggest high-level data volume requirements.\n\n## 6. Authentication\nUser authentication is required to link accounts for device synchronization and list sharing across family members. The specific authentication method was not specified in the requirements, so it remains unclear which protocol (e.g., OAuth2, JWT) will be implemented. It will apply to both regular users and family members accessing shared content. Session or token lifetime details have not been defined yet.\n\n## 7. Caching\nIt is unclear whether a dedicated caching layer is needed. Peak request rates and specific performance targets were not provided in the initial scope, making it difficult to determine if performance gains justify the added complexity. No specific caching technology has been chosen yet. The decision will depend on clarifying the expected load profile during the next review phase.\n\n## 8. External services\nNo external services or integrations were listed in the requirements. The project relies on internal components for database storage and API communication. There are no specified dependencies on third-party payment gateways, real-time messaging providers, or media storage platforms. The focus remains on internal data management and cross-device synchronization using standard web technologies.\n\n## 9. Security considerations\n- Input validation must enforce strict checks on all API endpoints to prevent injection attacks.\n- Secrets handling should use environment variables or a dedicated secrets manager, never hard-coded values.\n- Access control mechanisms must distinguish between regular users and family members, ensuring users can only access lists explicitly shared with them.\n- Data in transit needs encryption using TLS, and stored credentials must be hashed securely.\n\n## 10. Scaling\nThe system anticipates approximately 10,000 users. Given the expected scale, horizontal scaling was decided not to be required. Consequently, the architecture relies on vertical scaling capabilities inherent to a server-side deployment. If future traffic exceeds initial estimates, the team must reassess capacity planning. Currently, no specific mechanisms for distributed load balancing are mandated by the requirements. The backend can be deployed on a single scalable instance or a small cluster.\n\n## 11. Failure handling\nNot yet decided how failures will be managed. The need for asynchronous processing is unclear, meaning background queues may not exist to buffer errors. Since caching is also uncertain, direct database calls will handle most requests. No specific retry or timeout strategies are defined in the current data. The client application operates offline, which provides a natural fallback for server unavailability. Users will continue working locally, syncing data whenever connectivity is restored to the server.\n\n## 12. Trade-offs and rationale\n- A modular monolith is proposed (to be confirmed) to balance complexity against the smaller user base, avoiding the overhead of microservices.\n- REST is accepted for API communication due to its simplicity, though GraphQL remains a low-probability alternative.\n- The primary database choice is undecided; PostgreSQL is proposed (to be confirmed) versus MongoDB, depending on final data modeling needs.\n- No dedicated caching layer is specified, accepting slightly higher database load in exchange for simpler infrastructure management.\n\n## 13. Assumptions and open questions\n\n### Decided\n- API style: REST (confidence 97%)\n- Judged not needed: Horizontal scaling (estimated 25% likelihood it is needed)\n\n### Proposed, to be confirmed\n- Primary database: PostgreSQL (58%); alternative: MongoDB (31%)\n- Architecture style: modular monolith (57%); alternative: monolith (43%)\n\n### Unclear\n- Caching (27% estimated likelihood needed)\n- Asynchronous processing (67% estimated likelihood needed)\n\n### Depends on unspecified requirements\n- Realtime: affects Asynchronous processing\n- Geospatial: affects Primary database\n- App type: affects API style",
+  "design_warnings": [
+    "validation: val_invented"
+  ],
+  "validation": [
+    {
+      "id": "val_decision_api_style",
+      "text": "Does the design clearly use REST for API style?",
+      "probability": 0.97,
+      "status": "ok",
+      "sections": [
+        4
+      ]
+    },
+    {
+      "id": "val_missing_component",
+      "text": "Is any component that these requirements need missing from the design, for example a source of the venue data?",
+      "probability": 0.27,
+      "status": "ok",
+      "sections": [
+        2,
+        8
+      ]
+    },
+    {
+      "id": "val_invented",
+      "text": "Does the design present features or requirements that are not in the requirements, for example reviews, ratings or user accounts?",
+      "probability": 0.41,
+      "status": "possible",
+      "sections": [
+        2,
+        5
+      ]
+    },
+    {
+      "id": "val_contradiction",
+      "text": "Do any two sections of the design contradict each other?",
+      "probability": 0.29,
+      "status": "ok",
+      "sections": []
+    },
+    {
+      "id": "val_unneeded_complexity",
+      "text": "Is the design more complex than these requirements need?",
+      "probability": 0.27,
+      "status": "ok",
+      "sections": []
+    },
+    {
+      "id": "val_scale_overclaim",
+      "text": "Does the design claim it can handle a specific load or scale that the requirements do not state?",
+      "probability": 0.16,
+      "status": "ok",
+      "sections": [
+        10
+      ]
+    },
+    {
+      "id": "val_incoherent",
+      "text": "Does any section of the design contain unclear, nonsensical or meaningless text?",
+      "probability": 0.26,
+      "status": "ok",
+      "sections": []
+    }
+  ],
+  "revisions": []
+}
