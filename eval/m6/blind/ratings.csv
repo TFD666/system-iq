@@ -1,0 +1,13 @@
+idea,design,specific,correct,useful,clear
+bars,X,3,3,2,4
+bars,Y,4,4,4,4
+clinic,X,3,2,3,4
+clinic,Y,4,4,4,4
+club_events,X,3,4,3,4
+club_events,Y,4,3,4,4
+handmade_store,X,5,3,4,4
+handmade_store,Y,3,3,3,4
+sensor_dashboard,X,5,4,5,5
+sensor_dashboard,Y,2,2,2,3
+todo_sync,X,4,3,4,4
+todo_sync,Y,3,3,3,4
