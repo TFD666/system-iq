@@ -1,10 +1,24 @@
+import json
 import logging
 import os
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .config import allowed_origin, demo_mode, is_hosted, max_idea_chars, redact_idea
+from .config import (
+    allowed_origin,
+    demo_mode,
+    is_hosted,
+    max_idea_chars,
+    redact_idea,
+    samples_file,
+)
+from .hosted.access import (
+    AccessManager,
+    CapacityReached,
+    CodeLimitReached,
+    IPLimitReached,
+)
 from .hosted.jobs import JobManager, JobQueueFull
 from .llm import GroqProvider, LLMProvider, LLMUnavailableError
 from .schemas import (
@@ -211,6 +225,26 @@ def validate_design(
     )
 
 
+# ── access-control dependency ─────────────────────────────────────────────────
+
+
+def get_access_manager() -> AccessManager | None:
+    if not is_hosted():
+        return None
+    if not hasattr(app.state, "access_manager"):
+        app.state.access_manager = AccessManager()
+    return app.state.access_manager
+
+
+def _load_samples() -> list:
+    path = samples_file()
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
 # ── job manager dependency ────────────────────────────────────────────────────
 
 
@@ -234,21 +268,55 @@ def get_job_manager() -> JobManager:
             llm_factory=_llm_factory,
             decision_factory=_decision_factory,
             redact=redact_idea if is_hosted() else None,
+            access=get_access_manager(),
         )
     return app.state.job_manager
 
 
-# NOT SAFE TO DEPLOY before access control
 @app.post("/jobs")
 def create_job(
+    request: Request,
     body: JobRequest,
     manager: JobManager = Depends(get_job_manager),
+    access: AccessManager | None = Depends(get_access_manager),
 ):
+    hosted = is_hosted()
+    code_label = None
+    ip_hash = None
+
+    if hosted:
+        if access is None:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Access control is not configured."},
+            )
+        raw_code = request.headers.get("x-access-code", "")
+        code_label = access.check_code(raw_code)
+        if code_label is None:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "Invalid access code."
+                    " See README for how to try System IQ.",
+                },
+            )
+        ip_hash = access.client_ip(request)
+
     dm = demo_mode()
-    if dm in ("samples", "off"):
+    if dm == "off":
         return JSONResponse(
             status_code=503,
-            content={"detail": "Demo is not available right now."},
+            content={"detail": "Demo paused."},
+        )
+    if dm == "samples":
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "sample",
+                "sample": True,
+                "reason": "samples mode",
+                "samples": _load_samples(),
+            },
         )
 
     limit = max_idea_chars()
@@ -258,9 +326,41 @@ def create_job(
             content={"detail": f"Idea is too long (max {limit} characters)."},
         )
 
+    token = None
+    if hosted and access:
+        try:
+            token = access.reserve(code_label, ip_hash)
+        except IPLimitReached:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Daily limit reached for this network."
+                    " Try again tomorrow.",
+                },
+            )
+        except CodeLimitReached:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Daily limit reached for this access code.",
+                },
+            )
+        except CapacityReached as e:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "sample",
+                    "sample": True,
+                    "reason": e.reason,
+                    "samples": _load_samples(),
+                },
+            )
+
     try:
-        job_id, position = manager.submit(body.idea)
+        job_id, position = manager.submit(body.idea, token=token)
     except JobQueueFull:
+        if token and access:
+            access.release(token, app_failure=True)
         return JSONResponse(
             status_code=429,
             content={"detail": "Server busy, try in about 5 minutes."},

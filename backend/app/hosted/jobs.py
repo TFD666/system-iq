@@ -6,11 +6,12 @@ import uuid
 from typing import Callable
 
 from ..config import demo_mode
+from ..decision.provider import DecisionProvider, DecisionRateLimitError
 from ..design import TokenBudget
-from ..decision.provider import DecisionProvider
-from ..llm import LLMProvider
+from ..llm import LLMProvider, RateLimitError
 from ..pipeline import map_pipeline_error, run_pipeline
 from ..schemas import DesignRequest
+from .access import AccessManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class JobManager:
         clock: Callable[[], float] = time.time,
         ttl_seconds: int = 3600,
         max_waiting: int = 2,
+        access: AccessManager | None = None,
     ):
         self._llm_factory = llm_factory
         self._decision_factory = decision_factory
@@ -37,6 +39,7 @@ class JobManager:
         self._clock = clock
         self._ttl = ttl_seconds
         self._max_waiting = max_waiting
+        self._access = access
 
         self._lock = threading.Lock()
         self._jobs: dict[str, dict] = {}
@@ -66,7 +69,7 @@ class JobManager:
 
     # ── public API ────────────────────────────────────────────────────
 
-    def submit(self, idea: str) -> tuple[str, int]:
+    def submit(self, idea: str, token: str | None = None) -> tuple[str, int]:
         self.purge_expired()
         with self._lock:
             queued = sum(
@@ -87,7 +90,7 @@ class JobManager:
                 "_order": self._order,
             }
             position = self._position(job_id)
-        self._queue.put((job_id, idea))
+        self._queue.put((job_id, idea, token))
         self.start()
         return job_id, position
 
@@ -144,13 +147,13 @@ class JobManager:
                 continue
             if item is None:
                 break
-            job_id, idea = item
+            job_id, idea, token = item
             try:
-                self._run_one_job(job_id, idea)
+                self._run_one_job(job_id, idea, token)
             except Exception:
                 pass
 
-    def _run_one_job(self, job_id: str, idea: str) -> None:
+    def _run_one_job(self, job_id: str, idea: str, token: str | None = None) -> None:
         last_stage: list[str | None] = [None]
 
         with self._lock:
@@ -167,45 +170,100 @@ class JobManager:
                     j["stage"] = name
                     j["detail"] = detail
 
+        jev_exhausted = self._access is not None and self._access.is_exhausted("jev")
+        dm = demo_mode()
+        if jev_exhausted:
+            mode = "llm_only"
+            fallback_reason: str | None = "llm_only (Jev quota exhausted)"
+        elif dm == "llm_only":
+            mode = "llm_only"
+            fallback_reason = None
+        else:
+            mode = "pipeline"
+            fallback_reason = None
+
         start = self._clock()
         try:
             if self._redact:
                 idea, _ = self._redact(idea)
 
-            mode = "llm_only" if demo_mode() == "llm_only" else "pipeline"
-            request = DesignRequest(
-                idea=idea,
-                stage="validate",
-                writer_style="confident",
-                max_revisions=0,
-                mode=mode,
-            )
-            llm = self._llm_factory()
-            dp = self._decision_factory()
-            response = run_pipeline(
-                request, llm, dp, on_stage=on_stage, budget=self._budget,
-            )
-            with self._lock:
-                j = self._jobs.get(job_id)
-                if j:
-                    j["status"] = "done"
-                    j["result"] = response.model_dump(mode="json")
-                    j["finished_at"] = self._clock()
-                    j["stage"] = "done"
-                    j["detail"] = None
-            logger.info("job %s done %.1fs", job_id, self._clock() - start)
-
+            response = self._try_pipeline(idea, mode, on_stage)
+        except DecisionRateLimitError as exc:
+            if exc.free_quota_exhausted and mode != "llm_only":
+                if self._access:
+                    self._access.set_exhausted("jev")
+                try:
+                    response = self._try_pipeline(idea, "llm_only", on_stage)
+                    fallback_reason = "llm_only (Jev quota exhausted)"
+                except Exception as retry_exc:
+                    self._fail_job(job_id, retry_exc, last_stage[0], token, start)
+                    return
+            else:
+                self._fail_job(job_id, exc, last_stage[0], token, start)
+                return
         except Exception as exc:
-            status, msg = map_pipeline_error(exc, last_stage[0])
-            with self._lock:
-                j = self._jobs.get(job_id)
-                if j:
-                    j["status"] = "failed"
-                    j["error"] = {"status": status, "message": msg}
-                    j["finished_at"] = self._clock()
-                    j["stage"] = None
-                    j["detail"] = None
-            logger.info(
-                "job %s failed %d %.1fs",
-                job_id, status, self._clock() - start,
-            )
+            if isinstance(exc, RateLimitError):
+                retry_after = getattr(exc, "retry_after_seconds", None) or 0
+                if retry_after > 300 and self._access:
+                    self._access.set_exhausted("groq")
+            self._fail_job(job_id, exc, last_stage[0], token, start)
+            return
+
+        # ── success ───────────────────────────────────────────────────
+        if response.design_warnings:
+            for w in response.design_warnings:
+                if "validation skipped: rate limited" in w:
+                    if self._access:
+                        self._access.set_exhausted("jev")
+                    break
+
+        result = response.model_dump(mode="json")
+        if fallback_reason:
+            meta = result.get("meta")
+            if meta is not None:
+                meta["fallback"] = fallback_reason
+
+        with self._lock:
+            j = self._jobs.get(job_id)
+            if j:
+                j["status"] = "done"
+                j["result"] = result
+                j["finished_at"] = self._clock()
+                j["stage"] = "done"
+                j["detail"] = None
+
+        if self._access and token:
+            self._access.release(token, app_failure=False)
+
+        logger.info("job %s done %.1fs", job_id, self._clock() - start)
+
+    def _try_pipeline(self, idea, mode, on_stage):
+        request = DesignRequest(
+            idea=idea,
+            stage="validate",
+            writer_style="confident",
+            max_revisions=0,
+            mode=mode,
+        )
+        llm = self._llm_factory()
+        dp = self._decision_factory()
+        return run_pipeline(
+            request, llm, dp, on_stage=on_stage, budget=self._budget,
+        )
+
+    def _fail_job(self, job_id, exc, last_stage, token, start):
+        status, msg = map_pipeline_error(exc, last_stage)
+        with self._lock:
+            j = self._jobs.get(job_id)
+            if j:
+                j["status"] = "failed"
+                j["error"] = {"status": status, "message": msg}
+                j["finished_at"] = self._clock()
+                j["stage"] = None
+                j["detail"] = None
+        if self._access and token:
+            self._access.release(token, app_failure=True)
+        logger.info(
+            "job %s failed %d %.1fs",
+            job_id, status, self._clock() - start,
+        )

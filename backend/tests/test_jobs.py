@@ -529,12 +529,18 @@ def test_two_jobs_share_budget(monkeypatch):
 def test_jobs_work_when_hosted_while_design_blocked(monkeypatch):
     monkeypatch.setenv("HOSTED", "1")
     monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.setenv("ACCESS_CODES", "test:testcode:100")
+    monkeypatch.setenv("DAILY_DESIGN_CAP", "100")
+    monkeypatch.setenv("IP_DAILY_LIMIT", "100")
 
     mgr = _make_manager()
     app.dependency_overrides[get_job_manager] = lambda: mgr
 
-    from app.main import get_provider, get_decision_provider
+    from app.main import get_provider, get_decision_provider, get_access_manager
+    from app.hosted.access import AccessManager
 
+    am = AccessManager()
+    app.dependency_overrides[get_access_manager] = lambda: am
     app.dependency_overrides[get_provider] = _GoodProvider
     app.dependency_overrides[get_decision_provider] = _SimpleDecisionProvider
 
@@ -543,7 +549,10 @@ def test_jobs_work_when_hosted_while_design_blocked(monkeypatch):
     design_resp = client.post("/design", json={"idea": "Build a to-do app"})
     assert design_resp.status_code == 404
 
-    jobs_resp = client.post("/jobs", json={"idea": "Build a to-do app"})
+    jobs_resp = client.post(
+        "/jobs", json={"idea": "Build a to-do app"},
+        headers={"X-Access-Code": "testcode"},
+    )
     assert jobs_resp.status_code == 202
 
     j_id = jobs_resp.json()["job_id"]
@@ -556,10 +565,9 @@ def test_jobs_work_when_hosted_while_design_blocked(monkeypatch):
     mgr.stop()
 
 
-@pytest.mark.parametrize("mode", ["samples", "off"])
-def test_demo_mode_unavailable_503(monkeypatch, mode):
+def test_demo_mode_off_503(monkeypatch):
     monkeypatch.delenv("HOSTED", raising=False)
-    monkeypatch.setenv("DEMO_MODE", mode)
+    monkeypatch.setenv("DEMO_MODE", "off")
 
     mgr = _make_manager()
     app.dependency_overrides[get_job_manager] = lambda: mgr
@@ -567,7 +575,25 @@ def test_demo_mode_unavailable_503(monkeypatch, mode):
 
     resp = client.post("/jobs", json={"idea": "Build a to-do app"})
     assert resp.status_code == 503
-    assert "not available" in resp.json()["detail"].lower()
+    assert resp.json()["detail"] == "Demo paused."
+
+    mgr.stop()
+
+
+def test_demo_mode_samples_returns_sample(monkeypatch):
+    monkeypatch.delenv("HOSTED", raising=False)
+    monkeypatch.setenv("DEMO_MODE", "samples")
+
+    mgr = _make_manager()
+    app.dependency_overrides[get_job_manager] = lambda: mgr
+    client = TestClient(app)
+
+    resp = client.post("/jobs", json={"idea": "Build a to-do app"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sample"] is True
+    assert body["reason"] == "samples mode"
+    assert isinstance(body["samples"], list)
 
     mgr.stop()
 
