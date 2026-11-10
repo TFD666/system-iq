@@ -5,6 +5,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .config import allowed_origin, is_hosted, max_idea_chars
 from .extraction import ExtractionError
 from .llm import GroqAuthError, GroqProvider, LLMProvider, LLMUnavailableError, RateLimitError
 from .schemas import (
@@ -39,6 +40,34 @@ app = FastAPI(title="SystemIQ Backend")
 MAX_REQUEST_BODY_BYTES = 50 * 1024
 MAX_VALIDATE_BODY_BYTES = 100 * 1024
 
+_HOSTED_BLOCKED_PATHS = {"/design", "/validate"}
+
+
+@app.middleware("http")
+async def dynamic_cors(request: Request, call_next):
+    origin = allowed_origin()
+    req_origin = request.headers.get("origin")
+    match = origin is not None and req_origin == origin
+
+    if request.method == "OPTIONS" and match:
+        return JSONResponse(
+            content=None, status_code=200,
+            headers={
+                "access-control-allow-origin": origin,
+                "access-control-allow-methods": "GET, POST",
+                "access-control-allow-headers": "Content-Type, X-Access-Code",
+            },
+        )
+
+    response = await call_next(request)
+
+    if match:
+        response.headers["access-control-allow-origin"] = origin
+        response.headers["access-control-allow-methods"] = "GET, POST"
+        response.headers["access-control-allow-headers"] = "Content-Type, X-Access-Code"
+
+    return response
+
 
 @app.middleware("http")
 async def enforce_body_size(request: Request, call_next):
@@ -49,6 +78,13 @@ async def enforce_body_size(request: Request, call_next):
             status_code=413,
             content={"detail": f"Request body too large (max {limit // 1024} KB)."},
         )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def hosted_guard(request: Request, call_next):
+    if is_hosted() and request.method == "POST" and request.url.path in _HOSTED_BLOCKED_PATHS:
+        return JSONResponse(status_code=404, content={"detail": "Not available on this server."})
     return await call_next(request)
 
 
@@ -100,14 +136,31 @@ def get_decision_provider() -> DecisionProvider:
 
 # ── routes ─────────────────────────────────────────────────────────────────────
 
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "hosted": is_hosted()}
+
+
 @app.post("/design", response_model=DesignResponse)
 def design(
     request: DesignRequest,
     llm: LLMProvider = Depends(get_provider),
     decision_provider: DecisionProvider = Depends(get_decision_provider),
 ):
+    limit = max_idea_chars()
+    if len(request.idea) > limit:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": f"Idea is too long (max {limit} characters)."},
+        )
+
+    last_stage = [None]
+
+    def _track_stage(name, detail):
+        last_stage[0] = name
+
     try:
-        return run_pipeline(request, llm, decision_provider)
+        return run_pipeline(request, llm, decision_provider, on_stage=_track_stage)
 
     except RateLimitError:
         return JSONResponse(
@@ -179,10 +232,11 @@ def design(
 
     except Exception as e:
         logger.error("design: unexpected error (%s)", type(e).__name__)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Internal error while writing the design. Try again."},
-        )
+        if last_stage[0] == "validating":
+            msg = "Internal error during validation. Try again."
+        else:
+            msg = "Internal error while writing the design. Try again."
+        return JSONResponse(status_code=500, content={"detail": msg})
 
 
 @app.post("/validate", response_model=DesignResponse)

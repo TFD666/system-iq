@@ -236,3 +236,38 @@ def test_pipeline_response_matches_http_response():
     assert http_json["requirements"] == pipeline_json["requirements"]
     assert http_json["decisions"] == pipeline_json["decisions"]
     assert set(http_json.keys()) == set(pipeline_json.keys())
+
+
+# ── budget tests ──────────────────────────────────────────────────────────────
+
+def test_shared_budget_accumulates_across_calls():
+    from app.design import TokenBudget
+    from unittest.mock import patch
+
+    shared = TokenBudget()
+    original_record = shared.record
+    call_count = [0]
+
+    def counting_record(total_tokens, output_tokens):
+        call_count[0] += 1
+        original_record(total_tokens, output_tokens)
+
+    shared.record = counting_record
+    request = DesignRequest(idea="Build a to-do app", stage="design")
+
+    run_pipeline(request, _GoodProvider(), _SimpleDecisionProvider(), budget=shared)
+    after_first = call_count[0]
+
+    run_pipeline(request, _GoodProvider(), _SimpleDecisionProvider(), budget=shared)
+    after_second = call_count[0]
+
+    assert after_first > 0
+    assert after_second > after_first
+
+
+def test_default_budget_is_independent_per_call():
+    request = DesignRequest(idea="Build a to-do app", stage="design")
+    r1 = run_pipeline(request, _GoodProvider(), _SimpleDecisionProvider())
+    r2 = run_pipeline(request, _GoodProvider(), _SimpleDecisionProvider())
+    assert r1.stage == "designed"
+    assert r2.stage == "designed"

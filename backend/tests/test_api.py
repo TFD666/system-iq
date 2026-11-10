@@ -483,9 +483,7 @@ def test_unexpected_error_during_validation_becomes_clean_500(caplog):
         response = client.post("/design", json={"idea": "Build a to-do app"})
 
     assert response.status_code == 500
-    # After the pipeline refactor the endpoint has a single catch-all; the
-    # message is generic rather than stage-specific.
-    assert "Try again" in response.json()["detail"]
+    assert response.json()["detail"] == "Internal error during validation. Try again."
     for record in caplog.records:
         assert "super secret design text" not in record.getMessage()
     assert any("RuntimeError" in record.getMessage() for record in caplog.records)
@@ -1028,3 +1026,135 @@ def test_idea_text_does_not_leak_on_groq_auth_error(caplog):
     assert SENSITIVE_IDEA not in response.text
     for record in caplog.records:
         assert SENSITIVE_IDEA not in record.getMessage()
+
+
+# ── healthz tests ─────────────────────────────────────────────────────────────
+
+def test_healthz_local_mode(monkeypatch):
+    monkeypatch.delenv("HOSTED", raising=False)
+    client = TestClient(app)
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "hosted": False}
+
+
+def test_healthz_hosted_mode(monkeypatch):
+    monkeypatch.setenv("HOSTED", "1")
+    client = TestClient(app)
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "hosted": True}
+
+
+def test_healthz_makes_zero_provider_calls():
+    def _explode():
+        raise AssertionError("provider called during /healthz")
+    app.dependency_overrides[get_provider] = _explode
+    app.dependency_overrides[get_decision_provider] = _explode
+    client = TestClient(app)
+    response = client.get("/healthz")
+    assert response.status_code == 200
+
+
+# ── CORS tests ────────────────────────────────────────────────────────────────
+
+def test_cors_headers_present_for_allowed_origin(monkeypatch):
+    monkeypatch.setenv("ALLOWED_ORIGIN", "https://example.com")
+    client = TestClient(app)
+    response = client.get("/healthz", headers={"origin": "https://example.com"})
+    assert response.headers["access-control-allow-origin"] == "https://example.com"
+    assert "GET" in response.headers["access-control-allow-methods"]
+    assert "POST" in response.headers["access-control-allow-methods"]
+    assert "Content-Type" in response.headers["access-control-allow-headers"]
+    assert "X-Access-Code" in response.headers["access-control-allow-headers"]
+
+
+def test_cors_headers_absent_for_wrong_origin(monkeypatch):
+    monkeypatch.setenv("ALLOWED_ORIGIN", "https://example.com")
+    client = TestClient(app)
+    response = client.get("/healthz", headers={"origin": "https://evil.com"})
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_cors_headers_absent_when_allowed_origin_unset(monkeypatch):
+    monkeypatch.delenv("ALLOWED_ORIGIN", raising=False)
+    client = TestClient(app)
+    response = client.get("/healthz", headers={"origin": "https://example.com"})
+    assert "access-control-allow-origin" not in response.headers
+
+
+# ── hosted-mode 404 guard ─────────────────────────────────────────────────────
+
+def test_hosted_mode_blocks_design(monkeypatch):
+    monkeypatch.setenv("HOSTED", "1")
+    client = TestClient(app)
+    response = client.post("/design", json={"idea": "test"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Not available on this server."
+
+
+def test_hosted_mode_blocks_validate(monkeypatch):
+    monkeypatch.setenv("HOSTED", "1")
+    client = TestClient(app)
+    response = client.post("/validate", json={})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Not available on this server."
+
+
+def test_not_hosted_allows_design(monkeypatch):
+    monkeypatch.delenv("HOSTED", raising=False)
+    client = make_client(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "Build a to-do app", "stage": "extract"})
+    assert response.status_code == 200
+
+
+# ── idea size limit (MAX_IDEA_CHARS) ──────────────────────────────────────────
+
+def test_max_idea_chars_hosted_default(monkeypatch):
+    monkeypatch.setenv("HOSTED", "1")
+    monkeypatch.delenv("MAX_IDEA_CHARS", raising=False)
+    from app.config import max_idea_chars
+    assert max_idea_chars() == 2000
+
+
+def test_max_idea_chars_explicit_env(monkeypatch):
+    monkeypatch.setenv("MAX_IDEA_CHARS", "500")
+    monkeypatch.delenv("HOSTED", raising=False)
+    from app.config import max_idea_chars
+    assert max_idea_chars() == 500
+
+
+def test_max_idea_chars_local_default(monkeypatch):
+    monkeypatch.delenv("HOSTED", raising=False)
+    monkeypatch.delenv("MAX_IDEA_CHARS", raising=False)
+    from app.config import max_idea_chars
+    assert max_idea_chars() == 20000
+
+
+def test_idea_too_long_returns_422(monkeypatch):
+    monkeypatch.setenv("MAX_IDEA_CHARS", "100")
+    monkeypatch.delenv("HOSTED", raising=False)
+    client = make_client(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "x" * 101})
+    assert response.status_code == 422
+    assert "max 100 characters" in response.json()["detail"]
+
+
+def test_idea_within_limit_passes(monkeypatch):
+    monkeypatch.setenv("MAX_IDEA_CHARS", "100")
+    monkeypatch.delenv("HOSTED", raising=False)
+    client = make_client(AlwaysGoodProvider())
+    response = client.post("/design", json={"idea": "x" * 100, "stage": "extract"})
+    assert response.status_code == 200
+
+
+# ── redact.py copy test ───────────────────────────────────────────────────────
+
+def test_redact_files_are_identical():
+    """cli/redact.py and backend/app/redact.py must be identical
+    (CRLF normalized to LF, trailing newline stripped)."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[2]
+    cli_text = (root / "cli" / "redact.py").read_text(encoding="utf-8").replace("\r\n", "\n").rstrip("\n")
+    backend_text = (root / "backend" / "app" / "redact.py").read_text(encoding="utf-8").replace("\r\n", "\n").rstrip("\n")
+    assert cli_text == backend_text

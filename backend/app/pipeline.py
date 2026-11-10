@@ -161,6 +161,7 @@ def run_pipeline(
     llm: LLMProvider,
     decision_provider: DecisionProvider,
     on_stage: StageCallback | None = None,
+    budget: TokenBudget | None = None,
 ) -> DesignResponse:
     """
     Run the /design pipeline up to request.stage.
@@ -171,8 +172,11 @@ def run_pipeline(
 
     on_stage is called for each stage that actually runs.  A raising
     callback is swallowed (only the exception class name is logged).
+
+    budget: share a TokenBudget across calls; None creates a fresh one.
     """
-    budget = TokenBudget()
+    if budget is None:
+        budget = TokenBudget()
 
     # ── extract ────────────────────────────────────────────────────────
     _fire(on_stage, "extracting")
