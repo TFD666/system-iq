@@ -31,3 +31,11 @@ def max_idea_chars() -> int:
 def redact_idea(text: str) -> tuple[str, list[tuple[str, int]]]:
     """Redact sensitive content from idea text before model calls."""
     return redact(text)
+
+
+_VALID_DEMO_MODES = {"live", "llm_only", "samples", "off"}
+
+
+def demo_mode() -> str:
+    val = os.environ.get("DEMO_MODE", "live").lower()
+    return val if val in _VALID_DEMO_MODES else "live"

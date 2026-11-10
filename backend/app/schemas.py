@@ -243,6 +243,10 @@ class DecisionMeta(BaseModel):
     writer_style: str | None = None
 
 
+class JobRequest(BaseModel):
+    idea: str = Field(min_length=1, max_length=20_000)
+
+
 class DesignResponse(BaseModel):
     # "stage" records which pipeline step produced this response:
     # "extracted" | "decided" | "designed" | "validated"

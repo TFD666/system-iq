@@ -13,6 +13,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable
 
+import httpx
+
 from .decision.policy import apply_policy
 from .decision.provider import (
     DecisionAuthError,
@@ -23,8 +25,8 @@ from .decision.provider import (
 )
 from .decision.questions import build_questions, build_state
 from .design import TokenBudget, write_design
-from .extraction import extract_requirements
-from .llm import DEFAULT_GROQ_MODEL, LLMProvider
+from .extraction import ExtractionError, extract_requirements
+from .llm import DEFAULT_GROQ_MODEL, GroqAuthError, LLMProvider, LLMUnavailableError, RateLimitError
 from .schemas import (
     AlternativeOut,
     DecisionMeta,
@@ -142,6 +144,48 @@ def run_validation_loop(
 # ── stage callback ────────────────────────────────────────────────────────────
 
 StageCallback = Callable[[str, dict | None], None]
+
+
+def map_pipeline_error(exc: Exception, last_stage: str | None) -> tuple[int, str]:
+    if isinstance(exc, RateLimitError):
+        return 429, "Rate limit reached. Please wait a moment and try again."
+    if isinstance(exc, ExtractionError):
+        return 502, f"Could not extract requirements from the idea: {exc}"
+    if isinstance(exc, GroqAuthError):
+        return 502, (
+            "LLM service rejected the API key. Check GROQ_API_KEY in "
+            "backend/.env and restart the server."
+        )
+    if isinstance(exc, LLMUnavailableError):
+        return 503, (
+            "The language model service is temporarily unavailable. "
+            "Try again in a few minutes."
+        )
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+        return 504, "The AI provider did not respond in time. Please try again."
+    if isinstance(exc, DecisionRateLimitError):
+        if exc.free_quota_exhausted:
+            return 429, (
+                "Jev free quota reached; it resets daily around 05:30 IST. "
+                "Try again later."
+            )
+        return 429, (
+            f"Decision service rate limit hit; "
+            f"retry after {exc.retry_after_seconds}s."
+        )
+    if isinstance(exc, DecisionAuthError):
+        return 502, (
+            "Decision service rejected the API key. Check OPENCODE_API_KEY "
+            "in backend/.env and restart the server."
+        )
+    if isinstance(exc, DecisionUnavailableError):
+        return 504, "The decision service did not respond. Please try again."
+    if isinstance(exc, DecisionFormatError):
+        return 502, "The decision service returned an unexpected response."
+    logger.error("pipeline: unexpected error (%s)", type(exc).__name__)
+    if last_stage == "validating":
+        return 500, "Internal error during validation. Try again."
+    return 500, "Internal error while writing the design. Try again."
 
 
 def _fire(on_stage: StageCallback | None, name: str, detail: dict | None = None) -> None:

@@ -242,9 +242,14 @@ def test_pipeline_response_matches_http_response():
 
 def test_shared_budget_accumulates_across_calls():
     from app.design import TokenBudget
-    from unittest.mock import patch
 
-    shared = TokenBudget()
+    fake_time = [0.0]
+    def fake_clock():
+        return fake_time[0]
+    def fake_sleep(seconds):
+        fake_time[0] += seconds
+
+    shared = TokenBudget(clock=fake_clock, sleep=fake_sleep)
     original_record = shared.record
     call_count = [0]
 

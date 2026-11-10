@@ -1,32 +1,28 @@
 import logging
 import os
 
-import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .config import allowed_origin, is_hosted, max_idea_chars
-from .extraction import ExtractionError
-from .llm import GroqAuthError, GroqProvider, LLMProvider, LLMUnavailableError, RateLimitError
+from .config import allowed_origin, demo_mode, is_hosted, max_idea_chars, redact_idea
+from .hosted.jobs import JobManager, JobQueueFull
+from .llm import GroqProvider, LLMProvider, LLMUnavailableError
 from .schemas import (
     DecisionMeta,
     DesignRequest,
     DesignResponse,
+    JobRequest,
     RevisionRoundOut,
     ValidateRequest,
     ValidationResultOut,
 )
 from .decision.provider import (
-    DecisionAuthError,
-    DecisionFormatError,
     DecisionProvider,
-    DecisionRateLimitError,
-    DecisionUnavailableError,
     FakeDecisionProvider,
     JevProvider,
     ReplayDecisionProvider,
 )
-from .pipeline import run_pipeline, run_validation_loop
+from .pipeline import map_pipeline_error, run_pipeline, run_validation_loop
 
 # ── logging setup ──────────────────────────────────────────────────────────────
 
@@ -161,82 +157,9 @@ def design(
 
     try:
         return run_pipeline(request, llm, decision_provider, on_stage=_track_stage)
-
-    except RateLimitError:
-        return JSONResponse(
-            status_code=429,
-            content={"detail": "Rate limit reached. Please wait a moment and try again."},
-        )
-
-    except ExtractionError as e:
-        return JSONResponse(
-            status_code=502,
-            content={"detail": f"Could not extract requirements from the idea: {e}"},
-        )
-
-    except GroqAuthError:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "detail": (
-                    "LLM service rejected the API key. Check GROQ_API_KEY in "
-                    "backend/.env and restart the server."
-                )
-            },
-        )
-
-    except LLMUnavailableError:
-        return JSONResponse(status_code=503, content={"detail": _LLM_UNAVAILABLE_DETAIL})
-
-    except (httpx.TimeoutException, httpx.NetworkError):
-        return JSONResponse(
-            status_code=504,
-            content={"detail": "The AI provider did not respond in time. Please try again."},
-        )
-
-    except DecisionRateLimitError as e:
-        if e.free_quota_exhausted:
-            msg = (
-                "Jev free quota reached; it resets daily around 05:30 IST. "
-                "Try again later."
-            )
-        else:
-            msg = (
-                f"Decision service rate limit hit; "
-                f"retry after {e.retry_after_seconds}s."
-            )
-        return JSONResponse(status_code=429, content={"detail": msg})
-
-    except DecisionAuthError:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "detail": (
-                    "Decision service rejected the API key. Check OPENCODE_API_KEY "
-                    "in backend/.env and restart the server."
-                )
-            },
-        )
-
-    except DecisionUnavailableError:
-        return JSONResponse(
-            status_code=504,
-            content={"detail": "The decision service did not respond. Please try again."},
-        )
-
-    except DecisionFormatError:
-        return JSONResponse(
-            status_code=502,
-            content={"detail": "The decision service returned an unexpected response."},
-        )
-
-    except Exception as e:
-        logger.error("design: unexpected error (%s)", type(e).__name__)
-        if last_stage[0] == "validating":
-            msg = "Internal error during validation. Try again."
-        else:
-            msg = "Internal error while writing the design. Try again."
-        return JSONResponse(status_code=500, content={"detail": msg})
+    except Exception as exc:
+        status, msg = map_pipeline_error(exc, last_stage[0])
+        return JSONResponse(status_code=status, content={"detail": msg})
 
 
 @app.post("/validate", response_model=DesignResponse)
@@ -286,3 +209,78 @@ def validate_design(
         ],
         revisions=[RevisionRoundOut(**round_dict) for round_dict in run.revision_rounds],
     )
+
+
+# ── job manager dependency ────────────────────────────────────────────────────
+
+
+def get_job_manager() -> JobManager:
+    if not hasattr(app.state, "job_manager"):
+        def _llm_factory() -> LLMProvider:
+            return GroqProvider()
+
+        def _decision_factory() -> DecisionProvider:
+            mode = os.environ.get("DECISION_PROVIDER", "jev").lower()
+            if mode == "fake":
+                return FakeDecisionProvider(model=_FAKE_MODEL_LABEL)
+            if mode == "replay":
+                replay_file = os.environ.get("DECISION_REPLAY_FILE")
+                if not replay_file:
+                    raise ValueError("DECISION_REPLAY_FILE is not set")
+                return ReplayDecisionProvider(replay_file)
+            return JevProvider()
+
+        app.state.job_manager = JobManager(
+            llm_factory=_llm_factory,
+            decision_factory=_decision_factory,
+            redact=redact_idea if is_hosted() else None,
+        )
+    return app.state.job_manager
+
+
+# NOT SAFE TO DEPLOY before access control
+@app.post("/jobs")
+def create_job(
+    body: JobRequest,
+    manager: JobManager = Depends(get_job_manager),
+):
+    dm = demo_mode()
+    if dm in ("samples", "off"):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Demo is not available right now."},
+        )
+
+    limit = max_idea_chars()
+    if len(body.idea) > limit:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": f"Idea is too long (max {limit} characters)."},
+        )
+
+    try:
+        job_id, position = manager.submit(body.idea)
+    except JobQueueFull:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Server busy, try in about 5 minutes."},
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={"job_id": job_id, "status": "queued", "position": position},
+    )
+
+
+@app.get("/jobs/{job_id}")
+def get_job(
+    job_id: str,
+    manager: JobManager = Depends(get_job_manager),
+):
+    job = manager.get(job_id)
+    if job is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Unknown or expired job."},
+        )
+    return job
