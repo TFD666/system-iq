@@ -689,6 +689,7 @@ def write_design(
     budget: TokenBudget,
     clock=time.monotonic,
     writer_style: str = "hedged",
+    on_group=None,
 ) -> DesignResult:
     """
     Write the full design document: one LLM call per section group (with
@@ -713,7 +714,10 @@ def write_design(
     total_prompt_tokens = 0
     total_completion_tokens = 0
 
-    for group in SECTION_GROUPS:
+    total_groups = len(SECTION_GROUPS)
+    for group_index, group in enumerate(SECTION_GROUPS, 1):
+        if on_group is not None:
+            on_group(group_index, total_groups)
         group_markdown, fallback_warnings, stats = _write_one_group(
             group, user_message, llm, budget, max_tokens_per_group,
             decisions, requirements.app_type, clock, writer_style,
