@@ -1,12 +1,16 @@
+import hmac
 import json
 import logging
 import os
+import time
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .config import (
+    admin_token,
     allowed_origin,
+    daily_design_cap,
     demo_mode,
     is_hosted,
     max_idea_chars,
@@ -36,21 +40,42 @@ from .decision.provider import (
     JevProvider,
     ReplayDecisionProvider,
 )
+from .logging_setup import configure_logging
 from .pipeline import map_pipeline_error, run_pipeline, run_validation_loop
 
 # ── logging setup ──────────────────────────────────────────────────────────────
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # ── app ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="SystemIQ Backend")
 
+_start_time = time.time()
+
 MAX_REQUEST_BODY_BYTES = 50 * 1024
 MAX_VALIDATE_BODY_BYTES = 100 * 1024
 
 _HOSTED_BLOCKED_PATHS = {"/design", "/validate"}
+
+_REPO_ROOT = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."),
+)
+
+
+# ── exception handler ──────────────────────────────────────────────────────────
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception):
+    matched = request.scope.get("route")
+    path = matched.path if matched and hasattr(matched, "path") else request.url.path
+    logger.error("unhandled %s on %s", type(exc).__name__, path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal error. Try again."},
+    )
 
 
 @app.middleware("http")
@@ -61,7 +86,7 @@ async def dynamic_cors(request: Request, call_next):
 
     if request.method == "OPTIONS" and match:
         return JSONResponse(
-            content=None, status_code=200,
+            content="", status_code=200,
             headers={
                 "access-control-allow-origin": origin,
                 "access-control-allow-methods": "GET, POST",
@@ -238,6 +263,8 @@ def get_access_manager() -> AccessManager | None:
 
 def _load_samples() -> list:
     path = samples_file()
+    if not os.path.isabs(path):
+        path = os.path.join(_REPO_ROOT, path)
     try:
         with open(path) as f:
             return json.load(f)
@@ -384,3 +411,39 @@ def get_job(
             content={"detail": "Unknown or expired job."},
         )
     return job
+
+
+# ── admin ──────────────────────────────────────────────────────────────────────
+
+
+@app.get("/admin/stats")
+def admin_stats(
+    request: Request,
+    access: AccessManager | None = Depends(get_access_manager),
+    manager: JobManager = Depends(get_job_manager),
+):
+    token = admin_token()
+    if not token:
+        return JSONResponse(status_code=404, content={"detail": "Not found."})
+
+    supplied = request.headers.get("x-admin-token", "")
+    if not hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8")):
+        return JSONResponse(status_code=403, content={"detail": "Forbidden."})
+
+    snap = access.snapshot() if access else {}
+    jcounts = manager.job_counts()
+
+    return {
+        "demo_mode": demo_mode(),
+        "day_utc": snap.get("day"),
+        "designs_today": snap.get("global_count", 0),
+        "daily_cap": snap.get("global_cap", daily_design_cap()),
+        "by_label": snap.get("code_counts", {}),
+        "ip_hashes_today": snap.get("ip_hashes_today", 0),
+        "failed_today": snap.get("failed_today", 0),
+        "jobs": jcounts,
+        "groq_exhausted": "groq" in snap.get("exhausted", []),
+        "jev_exhausted": "jev" in snap.get("exhausted", []),
+        "queue_length": jcounts["queued"],
+        "uptime_minutes": round((time.time() - _start_time) / 60, 1),
+    }

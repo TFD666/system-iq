@@ -368,6 +368,8 @@ class TestSnapshot:
         assert snap["code_counts"] == {"a": 1}
         assert snap["exhausted"] == []
         assert snap["day"] is not None
+        assert snap["failed_today"] == 0
+        assert snap["ip_hashes_today"] == 1
 
 
 # ── TestCheckOrder (endpoint) ─────────────────────────────────────────────────

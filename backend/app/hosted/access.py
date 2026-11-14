@@ -51,6 +51,7 @@ class AccessManager:
         self._reservations: dict[str, dict] = {}
         self._cap_80_warned = False
         self._cap_hit_warned = False
+        self._failed_today = 0
 
     def _maybe_reset(self) -> None:
         today = datetime.fromtimestamp(
@@ -66,6 +67,7 @@ class AccessManager:
             self._reservations.clear()
             self._cap_80_warned = False
             self._cap_hit_warned = False
+            self._failed_today = 0
 
     def check_code(self, raw_code: str) -> str | None:
         """Constant-time comparison against every configured code."""
@@ -73,8 +75,9 @@ class AccessManager:
         if not codes:
             return None
         found: str | None = None
+        raw_bytes = raw_code.encode("utf-8")
         for label, code, _limit in codes:
-            if hmac.compare_digest(raw_code, code):
+            if hmac.compare_digest(raw_bytes, code.encode("utf-8")):
                 found = label
         return found
 
@@ -145,6 +148,7 @@ class AccessManager:
             if res is None:
                 return
             if app_failure:
+                self._failed_today += 1
                 ip = res["ip_hash"]
                 lbl = res["code_label"]
                 if ip in self._ip_counts:
@@ -169,6 +173,8 @@ class AccessManager:
                 "global_cap": daily_design_cap(),
                 "code_counts": dict(self._code_counts),
                 "exhausted": sorted(self._exhausted),
+                "failed_today": self._failed_today,
+                "ip_hashes_today": len(self._ip_counts),
             }
 
     def _code_limit(self, label: str) -> int:

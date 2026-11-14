@@ -76,3 +76,7 @@ def trusted_proxy_hops() -> int:
 
 def samples_file() -> str:
     return os.environ.get("SAMPLES_FILE", "samples/index.json")
+
+
+def admin_token() -> str:
+    return os.environ.get("ADMIN_TOKEN", "")

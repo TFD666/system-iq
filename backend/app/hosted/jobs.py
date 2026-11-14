@@ -94,6 +94,15 @@ class JobManager:
         self.start()
         return job_id, position
 
+    def job_counts(self) -> dict:
+        with self._lock:
+            counts = {"queued": 0, "running": 0, "done": 0, "failed": 0}
+            for j in self._jobs.values():
+                s = j["status"]
+                if s in counts:
+                    counts[s] += 1
+            return counts
+
     def get(self, job_id: str) -> dict | None:
         self.purge_expired()
         with self._lock:
