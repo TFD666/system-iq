@@ -65,6 +65,13 @@ Useful flags: `--dry-run` (shows what would be sent, sends nothing), `--no-valid
 
 Tests need no network and no keys: `python -m pytest -q`
 
+## Install (after the hosted demo is live)
+
+Once a hosted backend exists, the CLI can be installed as a command instead of run from a checkout:
+
+    pip install "git+https://github.com/TFD666/system-iq.git#subdirectory=cli"
+    systemiq --version
+
 ## Privacy
 
 - The CLI blanks obvious secrets (API keys, emails, phone numbers, IP addresses) before anything is sent. This is

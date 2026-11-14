@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -9,7 +10,20 @@ import httpx
 from redact import redact
 
 CLI_VERSION = "V1"
+PACKAGE_VERSION = "1.0.0"
 DEFAULT_DESIGN_OUTPUT = Path("system-design.md")
+
+DEFAULT_API_URL = "http://localhost:8000"  # set to the hosted URL at deploy time
+
+
+def resolve_api_url(cli_value: str | None) -> str:
+    """Resolve the backend URL: --api-url flag, then SYSTEMIQ_API_URL, then DEFAULT_API_URL."""
+    if cli_value:
+        return cli_value.rstrip("/")
+    env_value = os.environ.get("SYSTEMIQ_API_URL")
+    if env_value:
+        return env_value.rstrip("/")
+    return DEFAULT_API_URL.rstrip("/")
 
 MAX_BYTES = 20 * 1024  # 20 KB limit for both file and inline input
 
@@ -661,6 +675,11 @@ def send_validate_to_backend(
 def main():
     parser = argparse.ArgumentParser(description="SystemIQ CLI")
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"systemiq {PACKAGE_VERSION}",
+    )
+    parser.add_argument(
         "input",
         nargs="?",
         default=None,
@@ -668,8 +687,9 @@ def main():
     )
     parser.add_argument(
         "--api-url",
-        default="http://localhost:8000",
-        help="Base URL of the SystemIQ backend (default: http://localhost:8000)",
+        default=None,
+        help="Base URL of the SystemIQ backend (default: $SYSTEMIQ_API_URL or "
+             f"{DEFAULT_API_URL})",
     )
     parser.add_argument(
         "--dry-run",
@@ -738,6 +758,7 @@ def main():
         help="With --validate-saved: send max_revisions from --max-revisions instead of 0",
     )
     args = parser.parse_args()
+    args.api_url = resolve_api_url(args.api_url)
     effective_stage = "design" if args.no_validate else args.stage
 
     # --- --validate-saved: a completely separate, idea-free path ---------------

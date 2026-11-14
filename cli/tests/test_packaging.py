@@ -1,0 +1,56 @@
+"""Tests for cli packaging (pyproject.toml, entry point, --version)."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+import tomli
+
+CLI_DIR = Path(__file__).parent.parent
+
+
+def _load_pyproject():
+    with open(CLI_DIR / "pyproject.toml", "rb") as f:
+        return tomli.load(f)
+
+
+class TestPyprojectToml:
+    def test_project_metadata(self):
+        data = _load_pyproject()
+        project = data["project"]
+        assert project["name"] == "systemiq"
+        assert project["version"] == "1.0.0"
+        assert project["requires-python"] == ">=3.10"
+
+    def test_dependency_is_pinned_httpx(self):
+        data = _load_pyproject()
+        deps = data["project"]["dependencies"]
+        assert deps == ["httpx==0.28.1"]
+
+    def test_py_modules(self):
+        data = _load_pyproject()
+        assert data["tool"]["setuptools"]["py-modules"] == ["systemiq", "redact"]
+
+    def test_entry_point(self):
+        data = _load_pyproject()
+        scripts = data["project"]["scripts"]
+        assert scripts["systemiq"] == "systemiq:main"
+
+
+class TestImports:
+    def test_import_systemiq_and_redact(self):
+        import redact
+        import systemiq
+
+        assert callable(systemiq.main)
+        assert callable(redact.redact)
+
+
+class TestVersionFlag:
+    def test_version_output(self):
+        result = subprocess.run(
+            [sys.executable, str(CLI_DIR / "systemiq.py"), "--version"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == "systemiq 1.0.0"
