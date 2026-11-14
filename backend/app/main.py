@@ -173,7 +173,11 @@ def get_decision_provider() -> DecisionProvider:
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "hosted": is_hosted()}
+    return {
+        "status": "ok",
+        "hosted": is_hosted(),
+        "max_idea_chars": max_idea_chars(),
+    }
 
 
 @app.post("/design", response_model=DesignResponse)

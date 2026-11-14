@@ -23,3 +23,9 @@ system-design.md
 private/eval/runs/
 private/
 eval/runs/
+
+cli/build/
+*.egg-info/
+
+cli/build/
+*.egg-info/

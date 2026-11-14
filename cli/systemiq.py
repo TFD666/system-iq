@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+import hosted_client
 from redact import redact
 
 CLI_VERSION = "V1"
@@ -346,6 +347,22 @@ def _build_design_header(meta: dict) -> str:
     return "\n".join(lines)
 
 
+def _check_output_path_available(out_path: str | None, force: bool) -> None:
+    """
+    Refuse early -- before any request is sent -- if the design output file
+    already exists and --force is absent. Prevents the hosted flow from
+    burning a run's quota only to discover at the end that the file can't
+    be written.
+    """
+    path = Path(out_path) if out_path else DEFAULT_DESIGN_OUTPUT
+    if path.exists() and not force:
+        print(
+            f"error: {path} already exists; use --force to overwrite, or choose --out",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def write_design_file(data: dict, out_path: str | None, force: bool) -> Path:
     """
     Write data["design_markdown"] (plus a short header) to disk.
@@ -386,6 +403,90 @@ _FALLBACK_MESSAGES = {
     503: "error: backend is misconfigured; check server configuration and restart",
     504: "error: backend timed out talking to the model",
 }
+
+
+def _finish_design_output(data: dict, json_mode: bool, out_path: str | None, force: bool) -> None:
+    """
+    Shared tail for a successful /design (or job) response: billing/fake/
+    replay warnings, write the design file, then print either raw JSON or
+    the readable rendering. Used by both the local /design flow and the
+    hosted job flow so they stay in sync.
+    """
+    meta = data.get("meta") or {}
+    billing = meta.get("decision_billing")
+    cost = meta.get("decision_cost")
+    if (cost is not None and cost > 0) or (billing is not None and billing != "free"):
+        print(
+            f"warning: Jev billed as '{billing}' with cost={cost}. "
+            "Check OPENCODE_API_KEY usage.",
+            file=sys.stderr,
+        )
+
+    decision_model_label = str(meta.get("decision_model", "")).lower()
+    if "fake" in decision_model_label:
+        # Decisions came from the fake (demo) provider, not real Jev output.
+        print(
+            "WARNING: decisions are FAKE (demo only), not real Jev output",
+            file=sys.stderr,
+        )
+    elif "replay" in decision_model_label:
+        # Decisions were replayed from a saved file, not a live Jev call.
+        print(
+            "WARNING: decisions are REPLAYED from a saved file, not a live Jev call",
+            file=sys.stderr,
+        )
+
+    # Write the design file to disk regardless of --json: it's a saved
+    # artifact, not terminal output, so --json's "raw response only" rule
+    # (which is about stdout) doesn't apply to it.
+    design_path = None
+    if data.get("stage") in ("designed", "validated"):
+        design_path = write_design_file(data, out_path, force)
+
+    if json_mode:
+        # Raw JSON only — nothing else on stdout.
+        print(json.dumps(data, indent=2))
+        return
+
+    if design_path is not None:
+        print(f"design written to {design_path}")
+
+        group_stats = meta.get("design_group_stats") or []
+        if group_stats:
+            # Numbers only, straight from design_group_stats -- so retries
+            # are visible here without having to read the server log.
+            n_groups = len(group_stats)
+            total_retries = sum(stat.get("retries", 0) for stat in group_stats)
+            total_seconds = round(sum(stat.get("elapsed_seconds", 0) for stat in group_stats), 1)
+            total_in = sum(stat.get("prompt_tokens", 0) for stat in group_stats)
+            total_out = sum(stat.get("completion_tokens", 0) for stat in group_stats)
+            print(
+                f"design: {n_groups} groups, {total_retries} retries, "
+                f"{total_seconds} s, {total_in}/{total_out} tokens"
+            )
+
+        validation = data.get("validation") or []
+        if validation:
+            print()
+            for line in _format_validation_table(validation):
+                print(line)
+
+        revisions_line = _format_revisions_line(data.get("revisions") or [])
+        if revisions_line:
+            print(revisions_line)
+
+        validation_summary_line = _format_validation_summary_line(meta)
+        if validation_summary_line:
+            print(validation_summary_line)
+
+        warnings = data.get("design_warnings") or []
+        if warnings:
+            print("design warnings:")
+            for warning in warnings:
+                print(f"  - {warning}")
+        print()
+
+    print_readable_response(data)
 
 
 def _exit_on_non_200(response: httpx.Response) -> None:
@@ -474,82 +575,7 @@ def send_to_backend(
         print("error: unexpected response from backend", file=sys.stderr)
         sys.exit(1)
 
-    # Warn if the decision provider charged real money or billed as non-free.
-    meta = data.get("meta") or {}
-    billing = meta.get("decision_billing")
-    cost = meta.get("decision_cost")
-    if (cost is not None and cost > 0) or (billing is not None and billing != "free"):
-        print(
-            f"warning: Jev billed as '{billing}' with cost={cost}. "
-            "Check OPENCODE_API_KEY usage.",
-            file=sys.stderr,
-        )
-
-    decision_model_label = str(meta.get("decision_model", "")).lower()
-    if "fake" in decision_model_label:
-        # Decisions came from the fake (demo) provider, not real Jev output.
-        print(
-            "WARNING: decisions are FAKE (demo only), not real Jev output",
-            file=sys.stderr,
-        )
-    elif "replay" in decision_model_label:
-        # Decisions were replayed from a saved file, not a live Jev call.
-        print(
-            "WARNING: decisions are REPLAYED from a saved file, not a live Jev call",
-            file=sys.stderr,
-        )
-
-    # Write the design file to disk regardless of --json: it's a saved
-    # artifact, not terminal output, so --json's "raw response only" rule
-    # (which is about stdout) doesn't apply to it.
-    design_path = None
-    if data.get("stage") in ("designed", "validated"):
-        design_path = write_design_file(data, out_path, force)
-
-    if json_mode:
-        # Raw JSON only — nothing else on stdout.
-        print(json.dumps(data, indent=2))
-        return
-
-    if design_path is not None:
-        print(f"design written to {design_path}")
-
-        group_stats = meta.get("design_group_stats") or []
-        if group_stats:
-            # Numbers only, straight from design_group_stats -- so retries
-            # are visible here without having to read the server log.
-            n_groups = len(group_stats)
-            total_retries = sum(stat.get("retries", 0) for stat in group_stats)
-            total_seconds = round(sum(stat.get("elapsed_seconds", 0) for stat in group_stats), 1)
-            total_in = sum(stat.get("prompt_tokens", 0) for stat in group_stats)
-            total_out = sum(stat.get("completion_tokens", 0) for stat in group_stats)
-            print(
-                f"design: {n_groups} groups, {total_retries} retries, "
-                f"{total_seconds} s, {total_in}/{total_out} tokens"
-            )
-
-        validation = data.get("validation") or []
-        if validation:
-            print()
-            for line in _format_validation_table(validation):
-                print(line)
-
-        revisions_line = _format_revisions_line(data.get("revisions") or [])
-        if revisions_line:
-            print(revisions_line)
-
-        validation_summary_line = _format_validation_summary_line(meta)
-        if validation_summary_line:
-            print(validation_summary_line)
-
-        warnings = data.get("design_warnings") or []
-        if warnings:
-            print("design warnings:")
-            for warning in warnings:
-                print(f"  - {warning}")
-        print()
-
-    print_readable_response(data)
+    _finish_design_output(data, json_mode, out_path, force)
 
 
 # ── validate-only mode (--validate-saved) ───────────────────────────────────────
@@ -670,6 +696,57 @@ def send_validate_to_backend(
             print(f"  - {warning}")
 
 
+# ── hosted job flow ──────────────────────────────────────────────────────────
+
+_FALLBACK_NOTE_DEFAULT = "generated without Jev decisions (LLM-only mode)"
+
+
+def _finish_job_result(result: dict, args, job_id: str) -> None:
+    """
+    Shared with the local flow via _finish_design_output; adds the two
+    job-only notices (LLM-only fallback, skipped validation).
+
+    Late safety net: the output file could have appeared while the job was
+    running (another process, another run). _check_output_path_available
+    already ran before the job was submitted, so re-check here and, if it
+    now exists, point at --job so the finished result isn't lost.
+    """
+    meta = result.get("meta") or {}
+    fallback = meta.get("fallback")
+    if fallback:
+        text = fallback if fallback != _FALLBACK_NOTE_DEFAULT else _FALLBACK_NOTE_DEFAULT
+        print(f"Note: {text}.", file=sys.stderr)
+    if meta.get("validation_status") == "skipped":
+        print("Note: validation was skipped.", file=sys.stderr)
+
+    out_path = Path(args.out) if args.out else DEFAULT_DESIGN_OUTPUT
+    if out_path.exists() and not args.force:
+        print(
+            f"error: {out_path} already exists; use --force to overwrite, or choose --out",
+            file=sys.stderr,
+        )
+        print(f"resume with --job {job_id} --out <other path>", file=sys.stderr)
+        sys.exit(1)
+
+    _finish_design_output(result, args.json, args.out, args.force)
+
+
+def _run_hosted_flow(clean_text: str, access_code: str | None, args, mode_info: dict) -> None:
+    access_code = hosted_client.require_access_code(access_code)
+
+    max_chars = mode_info.get("max_idea_chars") or 2000
+    hosted_client.check_idea_length(clean_text, max_chars)
+
+    hosted_client.confirm_hosted_run(args.yes)
+
+    job_info = hosted_client.submit_job(args.api_url, access_code, clean_text)
+    job_id = job_info["job_id"]
+    print(f"Job: {job_id} (resume with --job {job_id} within 60 minutes)")
+
+    result = hosted_client.poll_job(args.api_url, job_id)
+    _finish_job_result(result, args, job_id)
+
+
 # ── entry point ────────────────────────────────────────────────────────────────
 
 def main():
@@ -757,9 +834,44 @@ def main():
         action="store_true",
         help="With --validate-saved: send max_revisions from --max-revisions instead of 0",
     )
+    parser.add_argument(
+        "--access-code",
+        default=None,
+        help="Access code for the hosted demo (default: $SYSTEMIQ_ACCESS_CODE)",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the hosted-demo confirmation prompt",
+    )
+    parser.add_argument(
+        "--job",
+        default=None,
+        metavar="ID",
+        help="Resume polling a hosted job by id instead of submitting a new idea",
+    )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Download published sample design N (1-3); needs no server and no access code",
+    )
+    parser.epilog = (
+        "Environment: SYSTEMIQ_API_URL (default backend URL), "
+        "SYSTEMIQ_ACCESS_CODE (hosted demo access code).\n"
+        "Exit codes: 0 success, 1 error, 3 no design generated (sample or capacity)."
+    )
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
     args = parser.parse_args()
     args.api_url = resolve_api_url(args.api_url)
     effective_stage = "design" if args.no_validate else args.stage
+
+    # --- --sample: download a published sample, no server contact -------------
+
+    if args.sample is not None:
+        hosted_client.fetch_sample(args.sample, args.out, args.force)
+        return
 
     # --- --validate-saved: a completely separate, idea-free path ---------------
 
@@ -782,6 +894,18 @@ def main():
             out_path=args.out,
             force=args.force,
         )
+        return
+
+    # --- --job: resume polling an existing hosted job, nothing else ------------
+
+    if args.job:
+        _check_output_path_available(args.out, args.force)
+        mode_info = hosted_client.detect_mode(args.api_url)
+        if not mode_info.get("hosted"):
+            print("--job needs a hosted server.", file=sys.stderr)
+            sys.exit(1)
+        result = hosted_client.poll_job(args.api_url, args.job)
+        _finish_job_result(result, args, args.job)
         return
 
     if not args.input:
@@ -808,9 +932,19 @@ def main():
         clean_text, findings = redact(text)
         print_redaction_summary(findings)
 
+    access_code = hosted_client.resolve_access_code(args.access_code)
+
     # --- dry-run branch -------------------------------------------------------
+    # Never contacts the server (not even healthz).
 
     if args.dry_run:
+        if access_code:
+            print(f"dry-run: would POST to {args.api_url}/jobs")
+            print(f"dry-run: {len(clean_text)} characters of validated input")
+            print(f"dry-run: preview: {clean_text[:200]}")
+            hosted_client.print_privacy_notice()
+            return
+
         url = f"{args.api_url.rstrip('/')}/design"
         print(f"dry-run: would POST to {url}")
         print(f"dry-run: {len(clean_text)} characters of validated input")
@@ -818,7 +952,23 @@ def main():
         print(f"dry-run: preview: {clean_text[:200]}")
         return
 
-    # --- always print a one-line notice before making any network call --------
+    # --- refuse early if the output file already exists -----------------------
+    # Before any request (healthz included): losing a hosted run's quota to a
+    # file-exists error discovered only after the design is finished is the
+    # bug this guards against. Applies to both the hosted and local flows below.
+
+    _check_output_path_available(args.out, args.force)
+
+    # --- mode detection: decide hosted vs. the existing local flow -------------
+
+    mode_info = hosted_client.detect_mode(args.api_url)
+
+    if mode_info.get("hosted"):
+        _run_hosted_flow(clean_text, access_code, args, mode_info)
+        return
+
+    # --- existing local flow, unchanged -----------------------------------------
+
     print(
         f"sending your text to {args.api_url} (forwarded to the AI provider)",
         file=sys.stderr,

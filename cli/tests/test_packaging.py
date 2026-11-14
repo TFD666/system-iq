@@ -29,7 +29,7 @@ class TestPyprojectToml:
 
     def test_py_modules(self):
         data = _load_pyproject()
-        assert data["tool"]["setuptools"]["py-modules"] == ["systemiq", "redact"]
+        assert data["tool"]["setuptools"]["py-modules"] == ["systemiq", "redact", "hosted_client"]
 
     def test_entry_point(self):
         data = _load_pyproject()
@@ -39,11 +39,13 @@ class TestPyprojectToml:
 
 class TestImports:
     def test_import_systemiq_and_redact(self):
+        import hosted_client
         import redact
         import systemiq
 
         assert callable(systemiq.main)
         assert callable(redact.redact)
+        assert callable(hosted_client.detect_mode)
 
 
 class TestVersionFlag:

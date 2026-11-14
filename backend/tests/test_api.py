@@ -1032,18 +1032,20 @@ def test_idea_text_does_not_leak_on_groq_auth_error(caplog):
 
 def test_healthz_local_mode(monkeypatch):
     monkeypatch.delenv("HOSTED", raising=False)
+    monkeypatch.delenv("MAX_IDEA_CHARS", raising=False)
     client = TestClient(app)
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "hosted": False}
+    assert response.json() == {"status": "ok", "hosted": False, "max_idea_chars": 20000}
 
 
 def test_healthz_hosted_mode(monkeypatch):
     monkeypatch.setenv("HOSTED", "1")
+    monkeypatch.delenv("MAX_IDEA_CHARS", raising=False)
     client = TestClient(app)
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "hosted": True}
+    assert response.json() == {"status": "ok", "hosted": True, "max_idea_chars": 2000}
 
 
 def test_healthz_makes_zero_provider_calls():

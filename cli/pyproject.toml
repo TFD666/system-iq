@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["systemiq", "redact"]
+py-modules = ["systemiq", "redact", "hosted_client"]
 
 [project.scripts]
 systemiq = "systemiq:main"
