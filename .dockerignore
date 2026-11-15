@@ -1,0 +1,33 @@
+# Secrets: never bake these into an image layer.
+.env
+.env.*
+backend/.env
+
+# Python virtualenvs: huge, platform-specific, rebuilt by pip install in the image.
+.venv
+**/.venv
+venv
+
+# VCS and CI metadata: no runtime value, and .git can be large.
+.git
+.github
+
+# Python build byte-code: regenerated at runtime, churns the build cache.
+**/__pycache__
+**/*.pyc
+
+# Evaluation harness, CLI, docs, generated site and scripts: not part of the served backend.
+eval
+cli
+docs
+site
+scripts
+review_*.txt
+
+# Tests and test caches: not needed to run the server.
+**/tests
+.pytest_cache
+
+# Docs/markdown: not needed to run the server, except the one samples need.
+*.md
+!samples/README.md
