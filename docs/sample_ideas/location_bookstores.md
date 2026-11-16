@@ -1,0 +1,1 @@
+A mobile app that shows nearby independent bookstores on a map, with opening hours, a search by genre, and saved favourites. About 20,000 users across one city.

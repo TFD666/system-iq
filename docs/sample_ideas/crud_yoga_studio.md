@@ -1,0 +1,1 @@
+A web app for a small yoga studio to manage classes, bookings and cancellations. 3 staff and about 200 members, with a weekly timetable and booking confirmation by email.

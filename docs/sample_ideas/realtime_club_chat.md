@@ -1,0 +1,1 @@
+A real-time group chat for a university club with typing indicators, message history and push notifications. About 2,000 members, mostly active in the evenings.

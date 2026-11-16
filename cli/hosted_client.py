@@ -287,6 +287,9 @@ _BLOB_PATTERN = re.compile(r"github\.com/([^/]+)/([^/]+)/blob/")
 
 
 def blob_url_to_raw(url: str) -> str:
+    # Defensive: heal a URL built from a raw Windows path (backslashes) before
+    # matching the blob pattern, which expects forward slashes.
+    url = url.replace("\\", "/")
     return _BLOB_PATTERN.sub(r"raw.githubusercontent.com/\1/\2/", url)
 
 

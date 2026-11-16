@@ -331,6 +331,14 @@ class TestBlobUrlToRaw:
             "https://raw.githubusercontent.com/TFD666/system-iq/main/samples/clinic.md"
         )
 
+    def test_heals_backslashes_before_converting(self):
+        """A url saved from a Windows --out path may still contain backslashes;
+        blob_url_to_raw must normalize them defensively before matching."""
+        url = "https://github.com/TFD666/system-iq/blob/main/samples\\clinic.md"
+        assert hosted_client.blob_url_to_raw(url) == (
+            "https://raw.githubusercontent.com/TFD666/system-iq/main/samples/clinic.md"
+        )
+
 
 class TestFetchSample:
     INDEX = [
