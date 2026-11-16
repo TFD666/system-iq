@@ -1,6 +1,14 @@
 [
-    {
-        "title":  "Simple CRUD app: yoga studio bookings",
-        "url":  "https://github.com/TFD666/system-iq/blob/main/samples/crud_yoga_studio.md"
-    }
+  {
+    "title": "Simple CRUD app: yoga studio bookings",
+    "url": "https://github.com/TFD666/system-iq/blob/main/samples/crud_yoga_studio.md"
+  },
+  {
+    "title": "Location app: nearby bookstores",
+    "url": "https://github.com/TFD666/system-iq/blob/main/samples/location_bookstores.md"
+  },
+  {
+    "title": "Real-time app: club chat",
+    "url": "https://github.com/TFD666/system-iq/blob/main/samples/realtime_club_chat.md"
+  }
 ]
