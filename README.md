@@ -72,14 +72,19 @@ Once a hosted backend exists, the CLI can be installed as a command instead of r
     pip install "git+https://github.com/TFD666/system-iq.git#subdirectory=cli"
     systemiq --version
 
+If the `systemiq` command is not found, run: `python -m systemiq`
+
 ## Privacy
 
 - The CLI blanks obvious secrets (API keys, emails, phone numbers, IP addresses) before anything is sent. This is
   best-effort pattern matching, not a guarantee.
-- Your idea text goes to Groq (the LLM) and to OpenCode (the Jev model). Their free-tier terms apply, and
-  OpenCode's free models may use submitted text to improve their service. Do not enter secrets or confidential
-  information.
+- Your idea text goes to Groq (the LLM) and to OpenCode (the Jev model). Groq: zero data retention is enabled in
+  the account settings for this demo. OpenCode free tier: may use submitted text to improve their service. Do not
+  enter secrets or confidential information.
 - The backend stores nothing, and its logs hold only counts and ids, never idea or design text.
+- On the first run in a terminal the CLI prints a welcome message and creates a small marker file
+  (`welcome_shown`, no personal data) in your user config folder. Delete it or run `systemiq --welcome` to see it
+  again; set `SYSTEMIQ_NO_WELCOME=1` to turn it off.
 
 ## Known limits
 

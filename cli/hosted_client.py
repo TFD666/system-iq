@@ -15,7 +15,7 @@ JOB_TIMEOUT_SECONDS = 1200
 SAMPLES_PAGE_URL = "https://github.com/TFD666/system-iq/tree/main/samples"
 SAMPLES_INDEX_URL = "https://raw.githubusercontent.com/TFD666/system-iq/main/samples/index.json"
 # change to the zero-retention wording only after it is verified
-GROQ_RETENTION_LINE = "Groq may keep input and output logs for up to 30 days."
+GROQ_RETENTION_LINE = "Groq: zero data retention is enabled in the account settings for this demo."
 
 HEALTHZ_TIMEOUT = 5.0
 REQUEST_TIMEOUT = 10.0

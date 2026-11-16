@@ -14,7 +14,7 @@ CLI_VERSION = "V1"
 PACKAGE_VERSION = "1.0.0"
 DEFAULT_DESIGN_OUTPUT = Path("system-design.md")
 
-DEFAULT_API_URL = "http://localhost:8000"  # set to the hosted URL at deploy time
+DEFAULT_API_URL = "https://systemiq-api-pbwg.onrender.com"  # set to the hosted URL at deploy time
 
 
 def resolve_api_url(cli_value: str | None) -> str:
@@ -747,125 +747,218 @@ def _run_hosted_flow(clean_text: str, access_code: str | None, args, mode_info: 
     _finish_job_result(result, args, job_id)
 
 
+# ── first-run welcome ────────────────────────────────────────────────────────
+
+WELCOME = r"""            
+/\     /\
+  \ _____\
+   (_)-(_)
+   Welcome to SystemIQ !!!"""
+
+_WELCOME_MARKER_NAME = "welcome_shown"
+
+
+def config_dir() -> Path:
+    """SYSTEMIQ_CONFIG_DIR if set; else %APPDATA%\\systemiq on Windows, else
+    $XDG_CONFIG_HOME/systemiq or ~/.config/systemiq."""
+    override = os.environ.get("SYSTEMIQ_CONFIG_DIR")
+    if override:
+        return Path(override)
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(appdata) / "systemiq"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / "systemiq"
+    return Path.home() / ".config" / "systemiq"
+
+
+def maybe_show_welcome(args) -> None:
+    """
+    Print WELCOME to stderr once, on the first run only. --version and
+    --help never reach here -- argparse exits during parse_args() for both
+    -- so they need no explicit check here.
+    """
+    if not sys.stderr.isatty():
+        return
+    if args.json or args.quiet:
+        return
+    if os.environ.get("SYSTEMIQ_NO_WELCOME"):
+        return
+
+    marker = config_dir() / _WELCOME_MARKER_NAME
+    if marker.exists():
+        return
+
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("shown")
+    except OSError:
+        # Can't write the marker (e.g. the config path isn't a writable
+        # directory) -- never crash the CLI over a cosmetic welcome message.
+        return
+
+    print(WELCOME, file=sys.stderr)
+
+
+NO_ARGS_MESSAGE = """System IQ: turn a project idea into a structured system design.
+
+Quick start:
+  systemiq --access-code <your code> "A web app for a small clinic where patients book appointments online"
+  systemiq --sample 1        download a ready-made sample design (no code needed)
+  systemiq --help            all options
+
+The hosted demo takes about 3 minutes per design and daily capacity is limited. See the README."""
+
+
 # ── entry point ────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="SystemIQ CLI")
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"systemiq {PACKAGE_VERSION}",
+    parser = argparse.ArgumentParser(
+        description="SystemIQ CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Environment: SYSTEMIQ_API_URL (default backend URL), "
+            "SYSTEMIQ_ACCESS_CODE (hosted demo access code), "
+            "SYSTEMIQ_CONFIG_DIR (where the welcome marker is stored), "
+            "SYSTEMIQ_NO_WELCOME (set to disable the first-run welcome message).\n"
+            "Exit codes: 0 success, 1 error, 2 no arguments given, "
+            "3 no design generated (sample or capacity)."
+        ),
     )
-    parser.add_argument(
+    common = parser.add_argument_group("Common options")
+    advanced = parser.add_argument_group("Advanced and development options")
+
+    common.add_argument(
         "input",
         nargs="?",
         default=None,
         help="Input to process (not required with --validate-saved)",
     )
-    parser.add_argument(
-        "--api-url",
-        default=None,
-        help="Base URL of the SystemIQ backend (default: $SYSTEMIQ_API_URL or "
-             f"{DEFAULT_API_URL})",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate input and show what would be sent, without calling the backend",
-    )
-    parser.add_argument(
-        "--no-redact",
-        action="store_true",
-        help="Skip redaction and send the original text (prints a warning)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Print the raw backend response as JSON instead of a readable summary",
-    )
-    parser.add_argument(
-        "--stage",
-        choices=["extract", "decide", "design", "validate"],
-        default="validate",
-        help="Pipeline stage to stop at (default: validate)",
-    )
-    parser.add_argument(
-        "--out",
-        default=None,
-        help="Where to write the design markdown (default: ./system-design.md)",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite an existing design output file",
-    )
-    parser.add_argument(
-        "--max-revisions",
-        type=int,
-        default=1,
-        help="How many revise-then-revalidate rounds the validate stage may use (default: 1)",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["pipeline", "llm_only"],
-        default="pipeline",
-        help="pipeline (default): extract+decide+design+validate. "
-             "llm_only: design with no Jev decisions at all (baseline)",
-    )
-    parser.add_argument(
-        "--no-validate",
-        action="store_true",
-        help="Stop at the design stage; skip Jev validation",
-    )
-    parser.add_argument(
-        "--validate-saved",
-        default=None,
-        metavar="PATH",
-        help="Validate a saved /design response JSON instead of sending a new idea",
-    )
-    parser.add_argument(
-        "--design-file",
-        default=None,
-        metavar="PATH",
-        help="With --validate-saved: read the design markdown from this .md file instead",
-    )
-    parser.add_argument(
-        "--revise",
-        action="store_true",
-        help="With --validate-saved: send max_revisions from --max-revisions instead of 0",
-    )
-    parser.add_argument(
+    common.add_argument(
         "--access-code",
         default=None,
         help="Access code for the hosted demo (default: $SYSTEMIQ_ACCESS_CODE)",
     )
-    parser.add_argument(
+    common.add_argument(
         "--yes",
         action="store_true",
         help="Skip the hosted-demo confirmation prompt",
     )
-    parser.add_argument(
-        "--job",
+    common.add_argument(
+        "--out",
         default=None,
-        metavar="ID",
-        help="Resume polling a hosted job by id instead of submitting a new idea",
+        help="Where to write the design markdown (default: ./system-design.md)",
     )
-    parser.add_argument(
+    common.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing design output file",
+    )
+    common.add_argument(
         "--sample",
         type=int,
         default=None,
         metavar="N",
         help="Download published sample design N (1-3); needs no server and no access code",
     )
-    parser.epilog = (
-        "Environment: SYSTEMIQ_API_URL (default backend URL), "
-        "SYSTEMIQ_ACCESS_CODE (hosted demo access code).\n"
-        "Exit codes: 0 success, 1 error, 3 no design generated (sample or capacity)."
+    common.add_argument(
+        "--job",
+        default=None,
+        metavar="ID",
+        help="Resume polling a hosted job by id instead of submitting a new idea",
     )
-    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+    common.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate input and show what would be sent, without calling the backend",
+    )
+    common.add_argument(
+        "--version",
+        action="version",
+        version=f"systemiq {PACKAGE_VERSION}",
+    )
+
+    advanced.add_argument(
+        "--api-url",
+        default=None,
+        help="Base URL of the SystemIQ backend (default: $SYSTEMIQ_API_URL or "
+             f"{DEFAULT_API_URL})",
+    )
+    advanced.add_argument(
+        "--stage",
+        choices=["extract", "decide", "design", "validate"],
+        default="validate",
+        help="Pipeline stage to stop at (default: validate)",
+    )
+    advanced.add_argument(
+        "--mode",
+        choices=["pipeline", "llm_only"],
+        default="pipeline",
+        help="pipeline (default): extract+decide+design+validate. "
+             "llm_only: design with no Jev decisions at all (baseline)",
+    )
+    advanced.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="Stop at the design stage; skip Jev validation",
+    )
+    advanced.add_argument(
+        "--max-revisions",
+        type=int,
+        default=1,
+        help="How many revise-then-revalidate rounds the validate stage may use (default: 1)",
+    )
+    advanced.add_argument(
+        "--validate-saved",
+        default=None,
+        metavar="PATH",
+        help="Validate a saved /design response JSON instead of sending a new idea",
+    )
+    advanced.add_argument(
+        "--design-file",
+        default=None,
+        metavar="PATH",
+        help="With --validate-saved: read the design markdown from this .md file instead",
+    )
+    advanced.add_argument(
+        "--revise",
+        action="store_true",
+        help="With --validate-saved: send max_revisions from --max-revisions instead of 0",
+    )
+    advanced.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the raw backend response as JSON instead of a readable summary",
+    )
+    advanced.add_argument(
+        "--no-redact",
+        action="store_true",
+        help="Skip redaction and send the original text (prints a warning)",
+    )
+    advanced.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress the first-run welcome message",
+    )
+    advanced.add_argument(
+        "--welcome",
+        action="store_true",
+        help="Show the welcome message and exit",
+    )
+
     args = parser.parse_args()
+
+    # --- --welcome: always prints and exits, regardless of the marker ---------
+
+    if args.welcome:
+        print(WELCOME)
+        return
+
     args.api_url = resolve_api_url(args.api_url)
     effective_stage = "design" if args.no_validate else args.stage
+
+    maybe_show_welcome(args)
 
     # --- --sample: download a published sample, no server contact -------------
 
@@ -909,8 +1002,8 @@ def main():
         return
 
     if not args.input:
-        print("error: either an idea or --validate-saved is required", file=sys.stderr)
-        sys.exit(1)
+        print(NO_ARGS_MESSAGE)
+        sys.exit(2)
 
     try:
         text = load_input(args.input)

@@ -58,6 +58,17 @@ def _clear_systemiq_env(monkeypatch):
     """Keep existing tests independent of real SYSTEMIQ_* values in the environment."""
     monkeypatch.delenv("SYSTEMIQ_API_URL", raising=False)
     monkeypatch.delenv("SYSTEMIQ_ACCESS_CODE", raising=False)
+    monkeypatch.delenv("SYSTEMIQ_NO_WELCOME", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _welcome_config_dir(tmp_path, monkeypatch):
+    """
+    Every CLI test gets its own SYSTEMIQ_CONFIG_DIR under tmp_path, so the
+    first-run welcome marker never touches the real home, APPDATA or XDG
+    config folder.
+    """
+    monkeypatch.setenv("SYSTEMIQ_CONFIG_DIR", str(tmp_path / "systemiq-config"))
 
 
 @pytest.fixture(autouse=True)

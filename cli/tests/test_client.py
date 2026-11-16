@@ -1011,14 +1011,21 @@ def test_send_validate_to_backend_rate_limit_falls_back_to_fixed_message(capsys)
     assert "rate limited" in err
 
 
-def test_main_requires_either_input_or_validate_saved(capsys):
+def test_main_with_no_arguments_shows_quick_start_screen(capsys):
+    """
+    Behavior change: running with no arguments used to print a one-line
+    "error: ... --validate-saved is required" to stderr and exit 1. It now
+    prints a quick-start screen to stdout and exits 2, so a bare `systemiq`
+    guides a new user instead of just erroring (see NO_ARGS_MESSAGE).
+    """
     from systemiq import main
     with patch("sys.argv", ["systemiq"]):
         with pytest.raises(SystemExit) as exc_info:
             main()
-    assert exc_info.value.code == 1
-    err = capsys.readouterr().err
-    assert "--validate-saved" in err
+    assert exc_info.value.code == 2
+    out = capsys.readouterr().out
+    assert "--sample 1" in out
+    assert "--access-code" in out
 
 
 def test_main_validate_saved_sends_to_validate_endpoint(tmp_path):

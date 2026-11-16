@@ -16,6 +16,11 @@ class TestResolveApiUrl:
         monkeypatch.delenv("SYSTEMIQ_API_URL", raising=False)
         assert resolve_api_url(None) == DEFAULT_API_URL
 
+    def test_default_is_the_hosted_render_url(self, monkeypatch):
+        """Pin against accidentally reverting DEFAULT_API_URL back to localhost."""
+        monkeypatch.delenv("SYSTEMIQ_API_URL", raising=False)
+        assert resolve_api_url(None) == "https://systemiq-api-pbwg.onrender.com"
+
     def test_flag_trailing_slash_stripped(self, monkeypatch):
         monkeypatch.delenv("SYSTEMIQ_API_URL", raising=False)
         assert resolve_api_url("http://flag-host:1234/") == "http://flag-host:1234"

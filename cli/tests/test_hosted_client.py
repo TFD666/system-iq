@@ -139,6 +139,11 @@ class TestConfirmHostedRun:
         assert "Before you send" in err
         assert hosted_client.GROQ_RETENTION_LINE in err
 
+    def test_notice_contains_exact_groq_retention_line(self, capsys):
+        hosted_client.confirm_hosted_run(yes=True)
+        err = capsys.readouterr().err
+        assert "Groq: zero data retention is enabled in the account settings for this demo." in err
+
     def test_notice_always_printed_even_on_prompt(self, capsys):
         hosted_client.confirm_hosted_run(yes=False, isatty=True, input_func=lambda prompt: "y")
         assert "Before you send" in capsys.readouterr().err

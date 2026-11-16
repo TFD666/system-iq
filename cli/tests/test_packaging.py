@@ -56,3 +56,16 @@ class TestVersionFlag:
         )
         assert result.returncode == 0
         assert result.stdout.strip() == "systemiq 1.0.0"
+
+
+class TestModuleEntry:
+    def test_python_dash_m_systemiq_version(self):
+        """`python -m systemiq` must work: run from cli/ so systemiq.py (and its
+        same-directory imports, hosted_client/redact) are importable as top-level
+        modules -- no package or __main__.py needed, just the existing __main__ guard."""
+        result = subprocess.run(
+            [sys.executable, "-m", "systemiq", "--version"],
+            capture_output=True, text=True, cwd=str(CLI_DIR),
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == "systemiq 1.0.0"
