@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>System IQ — Structured System Design from a Project Idea</title>
+  <meta name="description" content="A Python CLI that turns a project idea into a structured 13-section system design using requirement extraction, bounded architecture decisions, and validation.">
+  <meta name="robots" content="noindex">
+  <meta property="og:title" content="System IQ — Structured System Design from a Project Idea">
+  <meta property="og:description" content="Turn a project idea into a structured 13-section system design.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- intro loader — first child, before skip link. Controller in motion.js -->
+  <div id="intro" class="intro" aria-hidden="true">
+    <svg class="intro__mark" width="190" height="190" viewBox="0 0 24 24" fill="none">
+      <circle class="intro__ring" cx="18.5" cy="12" r="2.5" fill="none" stroke="#38BDF8" stroke-width="0.9"/>
+      <path class="intro__stroke intro__trunk"  pathLength="100" d="M3 12h6"       stroke="#E6EDF3" stroke-width="2" stroke-linecap="round"/>
+      <path class="intro__stroke intro__branch" pathLength="100" d="M9 12 16 5.5"  stroke="#2C3647" stroke-width="2" stroke-linecap="round"/>
+      <path class="intro__stroke intro__branch" pathLength="100" d="M9 12 16 18.5" stroke="#2C3647" stroke-width="2" stroke-linecap="round"/>
+      <path class="intro__stroke intro__chosen" pathLength="100" d="M9 12h7"       stroke="#38BDF8" stroke-width="2" stroke-linecap="round"/>
+      <circle class="intro__node" cx="18.5" cy="12" r="2.5" fill="#38BDF8"/>
+    </svg>
+    <span class="intro__word">SYSTEM IQ</span>
+    <button class="intro__skip" type="button">Skip</button>
+  </div>
+
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- top bar -->
+  <header class="topbar">
+    <div class="wrap topbar__inner">
+      <a href="#top" class="topbar__logo" aria-label="System IQ — back to top">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 12h6" stroke="#E6EDF3" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M9 12 16 5.5" stroke="#4A5872" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M9 12 16 18.5" stroke="#4A5872" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M9 12h7" stroke="#38BDF8" stroke-width="2.4" stroke-linecap="round"/>
+          <circle cx="18.5" cy="12" r="2.6" fill="#38BDF8"/>
+        </svg>
+        <span class="topbar__name">SYSTEM IQ</span>
+      </a>
+      <nav class="topbar__nav" aria-label="Main">
+        <a href="#how">How it works</a>
+        <a href="#try">Try it</a>
+        <a href="#samples">Samples</a>
+        <a href="#measured">Measured</a>
+        <a href="https://github.com/TFD666/system-iq" class="topbar__source" target="_blank" rel="noopener noreferrer">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>Source</span>
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- hero -->
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero__grid" aria-hidden="true"></div>
+      <div class="hero__glow" aria-hidden="true"></div>
+      <canvas id="hero-cubes" class="hero__cubes" aria-hidden="true"></canvas>
+      <div class="wrap hero__inner">
+
+        <div class="eyebrow hero__reveal">
+          <span class="eyebrow__accent">OPEN SOURCE</span>
+          <span class="eyebrow__sep" aria-hidden="true">/</span>
+          <span class="eyebrow__muted">PYTHON CLI</span>
+        </div>
+
+        <h1 id="hero-title" class="hero__title hero__reveal">Turn a project idea into a structured system design.</h1>
+
+        <p class="hero__sub hero__reveal">A command-line tool sends your idea to a hosted pipeline. An LLM extracts the requirements, the Jev decision model makes the architecture calls, and a 13-section design gets written around them — then validated against them.</p>
+
+        <div class="hero__ctas hero__reveal">
+          <a href="#try" class="btn btn--primary">
+            Install the CLI
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </a>
+          <a href="#samples" class="btn btn--secondary">See a finished design</a>
+        </div>
+
+        <div class="hero__status hero__reveal">
+          <div class="status" aria-live="polite">
+            <span class="status__dot status__dot--dim" aria-hidden="true"></span>
+            <span class="status__text" id="status-text">Status needs JavaScript</span>
+          </div>
+        </div>
+
+        <div class="term hero__reveal hero__term">
+          <div class="term__bar">
+            <span class="term__title">systemiq — one design, about 3 minutes</span>
+          </div>
+          <div class="term__body">
+            <div class="term__cmd-clip"><div class="term__cmd"><span class="clr-accent">$ </span>systemiq --access-code <span class="clr-warn">ACCESS_CODE</span> "A web app for a small clinic where patients book appointments online"</div></div>
+            <div class="term__gap"></div>
+            <div class="term__stages">
+              <div class="term__line" data-row="1"><span class="term__icon clr-ok">✓</span><span class="term__name">redact</span><span class="term__note">secrets stripped locally</span></div>
+              <div class="term__line" data-row="2"><span class="term__icon clr-ok">✓</span><span class="term__name">extract</span><span class="term__note">requirements pulled — every claim quotes the idea</span></div>
+              <div class="term__line" data-row="3"><span class="term__icon clr-ok">✓</span><span class="term__name">decide</span><span class="term__note">6 bounded architecture decisions</span></div>
+              <div class="term__line" data-row="4"><span class="term__icon clr-accent">▸</span><span class="term__name">write</span><span class="term__note term__note--active">section 09 / 13</span></div>
+              <div class="term__line" data-row="5"><span class="term__icon clr-dim">·</span><span class="term__name clr-dim">validate</span><span class="term__note clr-dim">pending</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- how it works -->
+    <section class="section" id="how" aria-labelledby="how-title">
+      <div class="wrap">
+        <div class="section__rule"></div>
+        <div class="section__head reveal">
+          <div class="rail">
+            <span class="rail__num">01</span>
+            <span class="rail__label">PIPELINE</span>
+          </div>
+          <div class="section__col">
+            <h2 id="how-title" class="section__title">How it works</h2>
+            <p class="section__lead">Five stages, two models. The architecture choices are made by a decision model, not by the writer — and the finished design is checked back against them.</p>
+          </div>
+        </div>
+        <div class="section__body">
+          <div class="pipeline">
+            <button class="stage" type="button" aria-pressed="false">
+              <span class="stage__head">
+                <span class="stage__num">01</span>
+                <span class="stage__rail" aria-hidden="true"><span class="stage__fill"></span></span>
+                <span class="stage__node" aria-hidden="true"></span>
+              </span>
+              <span class="stage__name">redact</span>
+              <span class="stage__desc">Obvious secrets are stripped from your idea locally, before anything leaves your machine.</span>
+              <span class="stage__io">
+                <span>your idea</span>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="stage__out">secrets stripped, locally</span>
+              </span>
+            </button>
+            <button class="stage" type="button" aria-pressed="false">
+              <span class="stage__head">
+                <span class="stage__num">02</span>
+                <span class="stage__rail" aria-hidden="true"><span class="stage__fill"></span></span>
+                <span class="stage__node" aria-hidden="true"></span>
+              </span>
+              <span class="stage__name">extract</span>
+              <span class="stage__desc">An LLM pulls structured requirements from the idea. Every claim must quote the original text.</span>
+              <span class="stage__io">
+                <span>the idea</span>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="stage__out">requirements, each quoting it</span>
+              </span>
+            </button>
+            <button class="stage" type="button" aria-pressed="false">
+              <span class="stage__head">
+                <span class="stage__num">03</span>
+                <span class="stage__rail" aria-hidden="true"><span class="stage__fill"></span></span>
+                <span class="stage__node" aria-hidden="true"></span>
+              </span>
+              <span class="stage__name">decide</span>
+              <span class="stage__desc">The Jev decision model makes bounded architecture choices: API style, database, caching, async work, scaling.</span>
+              <span class="stage__io">
+                <span>requirements</span>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="stage__out">6 bounded decisions</span>
+              </span>
+            </button>
+            <button class="stage" type="button" aria-pressed="false">
+              <span class="stage__head">
+                <span class="stage__num">04</span>
+                <span class="stage__rail" aria-hidden="true"><span class="stage__fill"></span></span>
+                <span class="stage__node" aria-hidden="true"></span>
+              </span>
+              <span class="stage__name">write</span>
+              <span class="stage__desc">An LLM writes a 13-section system design built around those architecture decisions.</span>
+              <span class="stage__io">
+                <span>the decisions</span>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="stage__out">13-section design</span>
+              </span>
+            </button>
+            <button class="stage stage--last" type="button" aria-pressed="false">
+              <span class="stage__head">
+                <span class="stage__num">05</span>
+                <span class="stage__rail" aria-hidden="true"><span class="stage__fill"></span></span>
+                <span class="stage__node" aria-hidden="true"></span>
+              </span>
+              <span class="stage__name">validate</span>
+              <span class="stage__desc">Jev checks the finished design against the decisions and requirements.</span>
+              <span class="stage__io">
+                <span>the design</span>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" stroke="#10B981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="stage__out">validation report</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- try it -->
+    <section class="section section--try" id="try" aria-labelledby="try-title">
+      <canvas id="try-wave" class="try__wave" aria-hidden="true"></canvas>
+      <div class="wrap try__content">
+        <div class="section__rule"></div>
+        <div class="section__head reveal">
+          <div class="rail">
+            <span class="rail__num">02</span>
+            <span class="rail__label">INSTALL</span>
+          </div>
+          <div class="section__col">
+            <h2 id="try-title" class="section__title">Try it</h2>
+          </div>
+        </div>
+        <div class="section__body reveal">
+          <div class="code-box">
+            <div class="code-box__label">INSTALL</div>
+            <div class="code-box__inner">
+              <code id="cmd-install"><span class="clr-accent">$ </span>pip install "git+https://github.com/TFD666/system-iq.git#subdirectory=cli"</code>
+              <button class="copy-btn" type="button" data-target="cmd-install" aria-label="Copy install command">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                <span class="copy-btn__label">COPY</span>
+              </button>
+            </div>
+          </div>
+          <div class="code-box">
+            <div class="code-box__label">GENERATE</div>
+            <div class="code-box__inner">
+              <code id="cmd-run"><span class="clr-accent">$ </span>systemiq --access-code <span class="clr-warn">ACCESS_CODE</span> "A web app for a small clinic where patients book appointments online"</code>
+              <button class="copy-btn" type="button" data-target="cmd-run" aria-label="Copy run command">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                <span class="copy-btn__label">COPY</span>
+              </button>
+            </div>
+          </div>
+          <div class="chips">
+            <span class="chip">~3 min per design</span>
+            <span class="chip">no API keys</span>
+            <span class="chip">daily capacity cap</span>
+          </div>
+          <div class="try__notes">
+            <p>Download a sample without an access code: <code>systemiq --sample 1</code></p>
+            <p>Command not found? Try <code>python -m systemiq</code> instead.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- sample designs -->
+    <section class="section" id="samples" aria-labelledby="samples-title">
+      <div class="wrap">
+        <div class="section__rule"></div>
+        <div class="section__head reveal">
+          <div class="rail">
+            <span class="rail__num">03</span>
+            <span class="rail__label">PROOF</span>
+          </div>
+          <div class="section__col">
+            <h2 id="samples-title" class="section__title">Sample designs</h2>
+            <p class="section__lead">Unedited pipeline output.</p>
+          </div>
+        </div>
+        <div class="section__body">
+          <div class="samples reveal">
+            <a class="sample" href="https://github.com/TFD666/system-iq/blob/main/samples/crud_yoga_studio.md" target="_blank" rel="noopener noreferrer">
+              <div class="sample__icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+              <div class="sample__file">crud_yoga_studio.md</div>
+              <h3 class="sample__title">Simple CRUD app</h3>
+              <p class="sample__desc">Yoga studio bookings</p>
+              <div class="sample__foot">
+                <span class="sample__tag">UNEDITED OUTPUT</span>
+                <span class="sample__arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+              </div>
+            </a>
+            <a class="sample" href="https://github.com/TFD666/system-iq/blob/main/samples/location_bookstores.md" target="_blank" rel="noopener noreferrer">
+              <div class="sample__icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+              <div class="sample__file">location_bookstores.md</div>
+              <h3 class="sample__title">Location app</h3>
+              <p class="sample__desc">Nearby bookstores</p>
+              <div class="sample__foot">
+                <span class="sample__tag">UNEDITED OUTPUT</span>
+                <span class="sample__arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+              </div>
+            </a>
+            <a class="sample" href="https://github.com/TFD666/system-iq/blob/main/samples/realtime_club_chat.md" target="_blank" rel="noopener noreferrer">
+              <div class="sample__icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+              <div class="sample__file">realtime_club_chat.md</div>
+              <h3 class="sample__title">Real-time app</h3>
+              <p class="sample__desc">Club chat</p>
+              <div class="sample__foot">
+                <span class="sample__tag">UNEDITED OUTPUT</span>
+                <span class="sample__arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+              </div>
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- what I measured -->
+    <section class="section" id="measured" aria-labelledby="measured-title">
+      <div class="wrap">
+        <div class="section__rule"></div>
+        <div class="section__head reveal">
+          <div class="rail">
+            <span class="rail__num">04</span>
+            <span class="rail__label">EVALUATION</span>
+          </div>
+          <div class="section__col">
+            <h2 id="measured-title" class="section__title">What I measured</h2>
+          </div>
+        </div>
+        <div class="section__body">
+          <div class="eval">
+            <div class="eval__panel reveal">
+              <div class="eval__header">BLIND RATING · AVERAGE OF 6</div>
+              <div class="bar-row bar--llm">
+                <div class="bar__meta"><span class="bar__label">LLM-only</span><span class="bar__value">4.33</span></div>
+                <div class="bar__track"><div class="bar__fill"></div></div>
+              </div>
+              <div class="bar-row bar--hedged">
+                <div class="bar__meta"><span class="bar__label">Jev-assisted, hedged</span><span class="bar__value">3.29</span></div>
+                <div class="bar__track"><div class="bar__fill"></div></div>
+              </div>
+              <div class="bar-row bar--confident">
+                <div class="bar__meta"><span class="bar__label">Jev-assisted, confident</span><span class="bar__value">4.25</span></div>
+                <div class="bar__track"><div class="bar__fill"></div></div>
+              </div>
+              <div class="bar__scale"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
+            </div>
+            <div class="stats reveal">
+              <div class="stat">
+                <div class="stat__num">18 / 18</div>
+                <p class="stat__desc">Same choice in 18 of 18 repeats</p>
+              </div>
+              <div class="stat">
+                <div class="stat__num">+9%</div>
+                <p class="stat__desc">Extra input tokens per design</p>
+              </div>
+            </div>
+          </div>
+          <div class="eval__text reveal">
+            <p>Six ideas, one rater, blind ratings. With writing voice matched, there was no clear quality difference. What Jev adds: repeatable decisions and a validation report.</p>
+            <p>One rater, six ideas — directional, not conclusive.</p>
+            <p><a href="https://github.com/TFD666/system-iq/blob/main/eval/FINDINGS.md" target="_blank" rel="noopener noreferrer">Full findings &#8594;</a></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- privacy -->
+    <section class="section" id="privacy" aria-labelledby="privacy-title">
+      <div class="wrap">
+        <div class="section__rule"></div>
+        <div class="section__head reveal">
+          <div class="rail">
+            <span class="rail__num">05</span>
+            <span class="rail__label">PRIVACY</span>
+          </div>
+          <div class="section__col">
+            <h2 id="privacy-title" class="section__title">Privacy</h2>
+          </div>
+        </div>
+        <div class="section__body reveal">
+          <ul class="privacy-list">
+            <li class="privacy-item">Your idea is sent to Groq and OpenCode (both US) to generate the design.</li>
+            <li class="privacy-item">Groq: zero data retention is enabled in the account settings for this demo.</li>
+            <li class="privacy-item">OpenCode free tier: may use submitted text to improve their service.</li>
+            <li class="privacy-item">System IQ redacts obvious secrets, keeps your design in memory up to 60 minutes so you can download it, then deletes it. Nothing is written to disk. Only counts are logged.</li>
+          </ul>
+          <div class="privacy-warn">Do not enter secrets, personal data, or confidential company info.</div>
+          <p class="privacy-note">On first run, the CLI prints a welcome message and creates one marker file in your config folder. No personal data is stored.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- honest limits -->
+    <section class="section" id="limits" aria-labelledby="limits-title">
+      <div class="wrap">
+        <div class="section__rule"></div>
+        <div class="section__head reveal">
+          <div class="rail">
+            <span class="rail__num">06</span>
+            <span class="rail__label">LIMITS</span>
+          </div>
+          <div class="section__col">
+            <h2 id="limits-title" class="section__title">Honest limits</h2>
+          </div>
+        </div>
+        <div class="section__body reveal">
+          <ul class="limits-list">
+            <li class="limits-item">Free-tier rate limits make designs shorter and slower (~3 minutes).</li>
+            <li class="limits-item">This is a portfolio demo with daily capacity caps, not a service.</li>
+            <li class="limits-item">Evaluation: one rater, six ideas — small enough to be directional, not conclusive.</li>
+            <li class="limits-item">After a quiet period the first request takes about a minute while the server wakes.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- footer -->
+  <footer class="footer">
+    <div class="wrap">
+      <div class="footer__top">
+        <div class="footer__brand">
+          <a href="#top" class="footer__brand-logo" aria-label="System IQ — back to top">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M3 12h6" stroke="#E6EDF3" stroke-width="2.4" stroke-linecap="round"/>
+              <path d="M9 12 16 5.5" stroke="#4A5872" stroke-width="2.4" stroke-linecap="round"/>
+              <path d="M9 12 16 18.5" stroke="#4A5872" stroke-width="2.4" stroke-linecap="round"/>
+              <path d="M9 12h7" stroke="#38BDF8" stroke-width="2.4" stroke-linecap="round"/>
+              <circle cx="18.5" cy="12" r="2.6" fill="#38BDF8"/>
+            </svg>
+            <span class="footer__brand-name">SYSTEM IQ</span>
+          </a>
+          <p class="footer__brand-desc">A Python CLI that turns a project idea into a structured system design.</p>
+        </div>
+        <div class="footer__cols">
+          <div class="footer__col">
+            <div class="footer__col-title">PROJECT</div>
+            <a href="https://github.com/TFD666/system-iq" target="_blank" rel="noopener noreferrer">Source</a>
+            <a href="https://github.com/TFD666/system-iq/blob/main/eval/FINDINGS.md" target="_blank" rel="noopener noreferrer">Findings</a>
+            <a href="#samples">Samples</a>
+          </div>
+          <div class="footer__col">
+            <div class="footer__col-title">AUTHOR</div>
+            <a href="https://github.com/TFD666" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <a href="https://www.linkedin.com/in/harsh-tomar-9a848724b/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer__bottom">
+        <span class="footer__credit">Built by Harsh Tomar · 2026</span>
+        <span class="footer__badge">NO COOKIES · NO ANALYTICS · NO TRACKERS</span>
+      </div>
+    </div>
+  </footer>
+
+  <div class="sr-only" aria-live="polite" id="copy-announce"></div>
+  <script src="script.js"></script>
+  <script src="pipeline.js" defer></script>
+  <script src="motion.js" defer></script>
+</body>
+</html>

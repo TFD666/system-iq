@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="System IQ">
+  <rect width="32" height="32" rx="7" fill="#090B0E"/>
+  <path d="M4 16h8" stroke="#E6EDF3" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <path d="M12 16 21 7.5" stroke="#5A6880" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <path d="M12 16 21 24.5" stroke="#5A6880" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <path d="M12 16h9" stroke="#38BDF8" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <circle cx="24.5" cy="16" r="3.2" fill="#38BDF8"/>
+</svg>

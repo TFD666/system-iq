@@ -29,3 +29,10 @@ cli/build/
 
 cli/build/
 *.egg-info/
+node_modules/
+video/
+renders/
+capture/
+.env
+*.mp4
+*.exe
