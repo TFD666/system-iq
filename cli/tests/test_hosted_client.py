@@ -1,6 +1,7 @@
 """Tests for hosted_client.py. No real network; httpx.get/post are patched."""
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -431,30 +432,32 @@ class TestFetchSample:
     ]
 
     def test_success_writes_file(self, tmp_path, capsys):
-        out_path = str(tmp_path / "out.md")
+        out_path = tmp_path / "out.md"
         responses = [make_response(200, self.INDEX), make_response(200, "## Clinic design\n")]
         with patch("hosted_client.httpx.get", side_effect=responses):
-            hosted_client.fetch_sample(1, out_path, force=False)
-        assert (tmp_path / "out.md").read_text() == "## Clinic design\n"
+            hosted_client.fetch_sample(1, out_path)
+        assert out_path.read_text() == "## Clinic design\n"
 
     def test_default_out_path(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         responses = [make_response(200, self.INDEX), make_response(200, "## Clinic design\n")]
         with patch("hosted_client.httpx.get", side_effect=responses):
-            hosted_client.fetch_sample(1, None, force=False)
+            hosted_client.fetch_sample(1, Path("system-design.SAMPLE.md"))
         assert (tmp_path / "system-design.SAMPLE.md").exists()
 
-    def test_empty_index(self, capsys):
+    def test_empty_index(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
         with patch("hosted_client.httpx.get", return_value=make_response(200, [])):
             with pytest.raises(SystemExit) as exc_info:
-                hosted_client.fetch_sample(1, None, force=False)
+                hosted_client.fetch_sample(1, Path("system-design.SAMPLE.md"))
         assert exc_info.value.code == 1
         assert "No sample 1 is published" in capsys.readouterr().err
 
-    def test_missing_entry_n_too_high(self, capsys):
+    def test_missing_entry_n_too_high(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
         with patch("hosted_client.httpx.get", return_value=make_response(200, self.INDEX)):
             with pytest.raises(SystemExit) as exc_info:
-                hosted_client.fetch_sample(3, None, force=False)
+                hosted_client.fetch_sample(3, Path("system-design.SAMPLE.md"))
         assert exc_info.value.code == 1
         assert "No sample 3 is published" in capsys.readouterr().err
 
@@ -463,7 +466,7 @@ class TestFetchSample:
         out_path.write_text("existing")
         with patch("hosted_client.httpx.get", return_value=make_response(200, self.INDEX)):
             with pytest.raises(SystemExit) as exc_info:
-                hosted_client.fetch_sample(1, str(out_path), force=False)
+                hosted_client.fetch_sample(1, out_path)
         assert exc_info.value.code == 1
         assert "already exists" in capsys.readouterr().err
         assert out_path.read_text() == "existing"
@@ -473,5 +476,5 @@ class TestFetchSample:
         out_path.write_text("existing")
         responses = [make_response(200, self.INDEX), make_response(200, "## New design\n")]
         with patch("hosted_client.httpx.get", side_effect=responses):
-            hosted_client.fetch_sample(1, str(out_path), force=True)
+            hosted_client.fetch_sample(1, out_path, force=True)
         assert out_path.read_text() == "## New design\n"

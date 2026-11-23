@@ -293,7 +293,9 @@ def blob_url_to_raw(url: str) -> str:
     return _BLOB_PATTERN.sub(r"raw.githubusercontent.com/\1/\2/", url)
 
 
-def fetch_sample(n: int, out_path: str | None, force: bool) -> None:
+def fetch_sample(
+    n: int, path: Path, *, force: bool = False, auto: bool = False,
+) -> None:
     try:
         response = httpx.get(SAMPLES_INDEX_URL, timeout=REQUEST_TIMEOUT)
         entries = response.json()
@@ -311,10 +313,21 @@ def fetch_sample(n: int, out_path: str | None, force: bool) -> None:
         print(f"No sample {n} is published yet.", file=sys.stderr)
         sys.exit(1)
 
-    path = Path(out_path) if out_path else Path("system-design.SAMPLE.md")
-    if path.exists() and not force:
-        print(f"error: {path} already exists; use --force to overwrite", file=sys.stderr)
-        sys.exit(1)
+    if force:
+        path.write_text(markdown, encoding="utf-8")
+    elif auto:
+        while True:
+            try:
+                with open(path, "x", encoding="utf-8") as f:
+                    f.write(markdown)
+                break
+            except FileExistsError:
+                from systemiq import next_free_path
+                path = next_free_path(Path("system-design.SAMPLE.md"))
+    else:
+        if path.exists():
+            print(f"error: {path} already exists; use --force to overwrite", file=sys.stderr)
+            sys.exit(1)
+        path.write_text(markdown, encoding="utf-8")
 
-    path.write_text(markdown, encoding="utf-8")
-    print(f"sample written to {path}")
+    print(f"sample written to {os.path.abspath(path)}")

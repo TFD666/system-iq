@@ -1,16 +1,17 @@
 """
-Tests for the early output-path check: the hosted flow must refuse before
-sending anything if the design output file already exists, instead of
-discovering it only after the run (and quota) is spent.
+Tests for the early output-path check: an explicit --out must refuse before
+sending anything if the design output file already exists (without --force).
+Default names auto-number instead of erroring -- see test_auto_naming.py.
 """
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from systemiq import _finish_job_result, main
+from systemiq import DEFAULT_DESIGN_OUTPUT, _finish_job_result, main
 
 
 def make_response(status_code: int, body) -> MagicMock:
@@ -54,13 +55,15 @@ def _fail(*args, **kwargs):
 # ── hosted flow, new submission ──────────────────────────────────────────────
 
 class TestHostedEarlyCheck:
-    def test_existing_file_exits_1_with_zero_network(self, tmp_path, monkeypatch, capsys):
+    def test_explicit_out_exits_1_with_zero_network(self, tmp_path, monkeypatch, capsys):
+        """Explicit --out that already exists -> early error, no network."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / "system-design.md").write_text("existing")
 
         with patch("hosted_client.httpx.get", side_effect=_fail), \
              patch("hosted_client.httpx.post", side_effect=_fail), \
-             patch("sys.argv", ["systemiq", "idea", "--access-code", "c", "--yes"]):
+             patch("sys.argv", ["systemiq", "idea", "--access-code", "c", "--yes",
+                                "--out", "system-design.md"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
 
@@ -103,13 +106,14 @@ class TestHostedEarlyCheck:
 
         assert out_path.exists()
 
-    def test_checked_before_mode_detection(self, tmp_path, monkeypatch):
-        """The check must happen even before healthz -- not just before /jobs."""
+    def test_explicit_out_checked_before_mode_detection(self, tmp_path, monkeypatch):
+        """Explicit --out check happens before healthz -- not just before /jobs."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / "system-design.md").write_text("existing")
 
         with patch("hosted_client.httpx.get", side_effect=_fail), \
-             patch("sys.argv", ["systemiq", "idea", "--access-code", "c", "--yes"]):
+             patch("sys.argv", ["systemiq", "idea", "--access-code", "c", "--yes",
+                                "--out", "system-design.md"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
         assert exc_info.value.code == 1
@@ -118,13 +122,14 @@ class TestHostedEarlyCheck:
 # ── local flow ─────────────────────────────────────────────────────────────
 
 class TestLocalEarlyCheck:
-    def test_existing_file_exits_1_with_zero_network(self, tmp_path, monkeypatch, capsys):
+    def test_explicit_out_exits_1_with_zero_network(self, tmp_path, monkeypatch, capsys):
+        """Explicit --out that already exists -> early error, no network."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / "system-design.md").write_text("existing")
 
         with patch("hosted_client.httpx.get", side_effect=_fail), \
              patch("systemiq.httpx.post", side_effect=_fail), \
-             patch("sys.argv", ["systemiq", "idea"]):
+             patch("sys.argv", ["systemiq", "idea", "--out", "system-design.md"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
 
@@ -158,14 +163,15 @@ class TestJsonAndDryRunUnaffected:
 
         assert (tmp_path / "system-design.md").read_text() == "existing"
 
-    def test_json_mode_still_checked(self, tmp_path, monkeypatch, capsys):
-        """--json does not bypass the guard: the check applies the same either way."""
+    def test_json_mode_explicit_out_still_checked(self, tmp_path, monkeypatch, capsys):
+        """--json does not bypass the guard for explicit --out."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / "system-design.md").write_text("existing")
 
         with patch("hosted_client.httpx.get", side_effect=_fail), \
              patch("hosted_client.httpx.post", side_effect=_fail), \
-             patch("sys.argv", ["systemiq", "idea", "--access-code", "c", "--yes", "--json"]):
+             patch("sys.argv", ["systemiq", "idea", "--access-code", "c", "--yes", "--json",
+                                "--out", "system-design.md"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
         assert exc_info.value.code == 1
@@ -174,12 +180,14 @@ class TestJsonAndDryRunUnaffected:
 # ── --job ─────────────────────────────────────────────────────────────────────
 
 class TestJobEarlyCheck:
-    def test_existing_file_fails_before_polling(self, tmp_path, monkeypatch, capsys):
+    def test_explicit_out_fails_before_polling(self, tmp_path, monkeypatch, capsys):
+        """Explicit --out that already exists -> early error before polling."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / "system-design.md").write_text("existing")
 
         with patch("hosted_client.httpx.get", side_effect=_fail), \
-             patch("sys.argv", ["systemiq", "--job", "job1"]):
+             patch("sys.argv", ["systemiq", "--job", "job1",
+                                "--out", "system-design.md"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
 
@@ -206,6 +214,7 @@ class TestJobEarlyCheck:
 
 class TestLateSafetyNet:
     def test_resume_hint_printed_when_file_appears_late(self, tmp_path, monkeypatch, capsys):
+        """Late safety net for explicit name: file appeared during job run."""
         monkeypatch.chdir(tmp_path)
         (tmp_path / "system-design.md").write_text("appeared while job ran")
 
@@ -215,7 +224,9 @@ class TestLateSafetyNet:
             json = False
 
         with pytest.raises(SystemExit) as exc_info:
-            _finish_job_result(DONE_RESULT, FakeArgs(), "job-xyz")
+            _finish_job_result(
+                DONE_RESULT, FakeArgs(), "job-xyz", DEFAULT_DESIGN_OUTPUT,
+            )
 
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
@@ -232,6 +243,8 @@ class TestLateSafetyNet:
             force = True
             json = False
 
-        _finish_job_result(DONE_RESULT, FakeArgs(), "job-xyz")  # must not raise
+        _finish_job_result(
+            DONE_RESULT, FakeArgs(), "job-xyz", DEFAULT_DESIGN_OUTPUT,
+        )
         content = (tmp_path / "system-design.md").read_text()
         assert "appeared while job ran" not in content

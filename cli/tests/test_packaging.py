@@ -19,7 +19,7 @@ class TestPyprojectToml:
         data = _load_pyproject()
         project = data["project"]
         assert project["name"] == "systemiq"
-        assert project["version"] == "1.0.0"
+        assert project["version"] == "1.0.1"
         assert project["requires-python"] == ">=3.10"
 
     def test_dependency_is_pinned_httpx(self):
@@ -55,7 +55,7 @@ class TestVersionFlag:
             capture_output=True, text=True,
         )
         assert result.returncode == 0
-        assert result.stdout.strip() == "systemiq 1.0.0"
+        assert result.stdout.strip() == "systemiq 1.0.1"
 
 
 class TestModuleEntry:
@@ -68,4 +68,4 @@ class TestModuleEntry:
             capture_output=True, text=True, cwd=str(CLI_DIR),
         )
         assert result.returncode == 0
-        assert result.stdout.strip() == "systemiq 1.0.0"
+        assert result.stdout.strip() == "systemiq 1.0.1"

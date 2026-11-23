@@ -11,10 +11,29 @@ import hosted_client
 from redact import redact
 
 CLI_VERSION = "V1"
-PACKAGE_VERSION = "1.0.0"
+PACKAGE_VERSION = "1.0.1"
 DEFAULT_DESIGN_OUTPUT = Path("system-design.md")
 
+DEFAULT_SAMPLE_OUTPUT = Path("system-design.SAMPLE.md")
 DEFAULT_API_URL = "https://systemiq-api-pbwg.onrender.com"  # set to the hosted URL at deploy time
+
+
+def next_free_path(path: Path) -> Path:
+    """Return path if it doesn't exist, else path-2, path-3, ... up to -1001."""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    for n in range(2, 1002):
+        candidate = parent / f"{stem}-{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+    print(
+        f"error: too many {path.name} files in this folder; use --out <name>",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def resolve_api_url(cli_value: str | None) -> str:
@@ -347,40 +366,61 @@ def _build_design_header(meta: dict) -> str:
     return "\n".join(lines)
 
 
-def _check_output_path_available(out_path: str | None, force: bool) -> None:
+def _resolve_output_path(
+    out_path: str | None, force: bool, default: Path = DEFAULT_DESIGN_OUTPUT,
+) -> tuple[Path, bool]:
+    """Resolve the output path and whether it was auto-chosen.
+
+    Returns (path, auto). With an explicit --out that already exists and no
+    --force, exits 1 immediately. Without --out, auto-numbers the default
+    (unless --force, which overwrites the default directly).
     """
-    Refuse early -- before any request is sent -- if the design output file
-    already exists and --force is absent. Prevents the hosted flow from
-    burning a run's quota only to discover at the end that the file can't
-    be written.
-    """
-    path = Path(out_path) if out_path else DEFAULT_DESIGN_OUTPUT
-    if path.exists() and not force:
-        print(
-            f"error: {path} already exists; use --force to overwrite, or choose --out",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    if out_path:
+        path = Path(out_path)
+        if path.exists() and not force:
+            print(
+                f"error: {path} already exists; use --force to overwrite, or choose --out",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return path, False
+    if force:
+        return default, False
+    return next_free_path(default), True
 
 
-def write_design_file(data: dict, out_path: str | None, force: bool) -> Path:
-    """
-    Write data["design_markdown"] (plus a short header) to disk.
-    Refuses to overwrite an existing file unless force=True.
-    """
-    path = Path(out_path) if out_path else DEFAULT_DESIGN_OUTPUT
+def write_design_file(
+    data: dict, path: Path, *, force: bool = False, auto: bool = False,
+) -> Path:
+    """Write data["design_markdown"] (plus a short header) to disk.
 
-    if path.exists() and not force:
-        print(
-            f"error: {path} already exists; use --force to overwrite",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
+    auto=True  -> exclusive create, retry on race with next free name.
+    auto=False -> refuse to overwrite unless force=True.
+    """
     meta = data.get("meta") or {}
     header = _build_design_header(meta)
     markdown = data.get("design_markdown") or ""
-    path.write_text(header + "\n" + markdown, encoding="utf-8")
+    content = header + "\n" + markdown
+
+    if force:
+        path.write_text(content, encoding="utf-8")
+    elif auto:
+        while True:
+            try:
+                with open(path, "x", encoding="utf-8") as f:
+                    f.write(content)
+                return path
+            except FileExistsError:
+                path = next_free_path(DEFAULT_DESIGN_OUTPUT)
+    else:
+        if path.exists():
+            print(
+                f"error: {path} already exists; use --force to overwrite",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        path.write_text(content, encoding="utf-8")
+
     return path
 
 
@@ -405,7 +445,10 @@ _FALLBACK_MESSAGES = {
 }
 
 
-def _finish_design_output(data: dict, json_mode: bool, out_path: str | None, force: bool) -> None:
+def _finish_design_output(
+    data: dict, json_mode: bool, path: Path, *,
+    force: bool = False, auto: bool = False,
+) -> None:
     """
     Shared tail for a successful /design (or job) response: billing/fake/
     replay warnings, write the design file, then print either raw JSON or
@@ -441,7 +484,7 @@ def _finish_design_output(data: dict, json_mode: bool, out_path: str | None, for
     # (which is about stdout) doesn't apply to it.
     design_path = None
     if data.get("stage") in ("designed", "validated"):
-        design_path = write_design_file(data, out_path, force)
+        design_path = write_design_file(data, path, force=force, auto=auto)
 
     if json_mode:
         # Raw JSON only — nothing else on stdout.
@@ -449,7 +492,7 @@ def _finish_design_output(data: dict, json_mode: bool, out_path: str | None, for
         return
 
     if design_path is not None:
-        print(f"design written to {design_path}")
+        print(f"design written to {os.path.abspath(design_path)}")
 
         group_stats = meta.get("design_group_stats") or []
         if group_stats:
@@ -521,8 +564,9 @@ def send_to_backend(
     api_url: str,
     json_mode: bool = False,
     stage: str = "validate",
-    out_path: str | None = None,
+    out_path: str | Path | None = None,
     force: bool = False,
+    auto: bool = False,
     max_revisions: int = 1,
     mode: str = "pipeline",
 ) -> None:
@@ -535,6 +579,7 @@ def send_to_backend(
     to out_path (default ./system-design.md).
     On any error, print a message to stderr and raise SystemExit(1).
     """
+    path = Path(out_path) if out_path is not None else DEFAULT_DESIGN_OUTPUT
     url = f"{api_url.rstrip('/')}/design"
     # "validate" runs the design step too (and more Jev calls on top), so
     # it needs at least as long a window.
@@ -575,7 +620,7 @@ def send_to_backend(
         print("error: unexpected response from backend", file=sys.stderr)
         sys.exit(1)
 
-    _finish_design_output(data, json_mode, out_path, force)
+    _finish_design_output(data, json_mode, path, force=force, auto=auto)
 
 
 # ── validate-only mode (--validate-saved) ───────────────────────────────────────
@@ -665,14 +710,14 @@ def send_validate_to_backend(
 
     design_path = None
     if out_path is not None:
-        design_path = write_design_file(data, out_path, force)
+        design_path = write_design_file(data, Path(out_path), force=force)
 
     if json_mode:
         print(json.dumps(data, indent=2))
         return
 
     if design_path is not None:
-        print(f"design written to {design_path}")
+        print(f"design written to {os.path.abspath(design_path)}")
 
     meta = data.get("meta") or {}
     validation = data.get("validation") or []
@@ -701,15 +746,16 @@ def send_validate_to_backend(
 _FALLBACK_NOTE_DEFAULT = "generated without Jev decisions (LLM-only mode)"
 
 
-def _finish_job_result(result: dict, args, job_id: str) -> None:
+def _finish_job_result(
+    result: dict, args, job_id: str, path: Path, *, auto: bool = False,
+) -> None:
     """
     Shared with the local flow via _finish_design_output; adds the two
     job-only notices (LLM-only fallback, skipped validation).
 
-    Late safety net: the output file could have appeared while the job was
-    running (another process, another run). _check_output_path_available
-    already ran before the job was submitted, so re-check here and, if it
-    now exists, point at --job so the finished result isn't lost.
+    Late safety net for explicit --out: the output file could have appeared
+    while the job was running (another process, another run). Auto-named
+    paths handle this via exclusive-mode writing instead.
     """
     meta = result.get("meta") or {}
     fallback = meta.get("fallback")
@@ -719,19 +765,21 @@ def _finish_job_result(result: dict, args, job_id: str) -> None:
     if meta.get("validation_status") == "skipped":
         print("Note: validation was skipped.", file=sys.stderr)
 
-    out_path = Path(args.out) if args.out else DEFAULT_DESIGN_OUTPUT
-    if out_path.exists() and not args.force:
+    if not auto and path.exists() and not args.force:
         print(
-            f"error: {out_path} already exists; use --force to overwrite, or choose --out",
+            f"error: {path} already exists; use --force to overwrite, or choose --out",
             file=sys.stderr,
         )
         print(f"resume with --job {job_id} --out <other path>", file=sys.stderr)
         sys.exit(1)
 
-    _finish_design_output(result, args.json, args.out, args.force)
+    _finish_design_output(result, args.json, path, force=args.force, auto=auto)
 
 
-def _run_hosted_flow(clean_text: str, access_code: str | None, args, mode_info: dict) -> None:
+def _run_hosted_flow(
+    clean_text: str, access_code: str | None, args, mode_info: dict,
+    path: Path, *, auto: bool = False,
+) -> None:
     access_code = hosted_client.require_access_code(access_code)
 
     max_chars = mode_info.get("max_idea_chars") or 2000
@@ -744,7 +792,7 @@ def _run_hosted_flow(clean_text: str, access_code: str | None, args, mode_info: 
     print(f"Job: {job_id} (resume with --job {job_id} within 60 minutes)")
 
     result = hosted_client.poll_job(args.api_url, job_id)
-    _finish_job_result(result, args, job_id)
+    _finish_job_result(result, args, job_id, path, auto=auto)
 
 
 # ── first-run welcome ────────────────────────────────────────────────────────
@@ -848,12 +896,12 @@ def main():
     common.add_argument(
         "--out",
         default=None,
-        help="Where to write the design markdown (default: ./system-design.md)",
+        help="Where to save the design (default: system-design.md; if that exists, system-design-2.md, -3.md, ...)",
     )
     common.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite an existing design output file",
+        help="Overwrite the file named by --out (or system-design.md)",
     )
     common.add_argument(
         "--sample",
@@ -963,7 +1011,12 @@ def main():
     # --- --sample: download a published sample, no server contact -------------
 
     if args.sample is not None:
-        hosted_client.fetch_sample(args.sample, args.out, args.force)
+        sample_path, sample_auto = _resolve_output_path(
+            args.out, args.force, DEFAULT_SAMPLE_OUTPUT,
+        )
+        hosted_client.fetch_sample(
+            args.sample, sample_path, force=args.force, auto=sample_auto,
+        )
         return
 
     # --- --validate-saved: a completely separate, idea-free path ---------------
@@ -992,13 +1045,15 @@ def main():
     # --- --job: resume polling an existing hosted job, nothing else ------------
 
     if args.job:
-        _check_output_path_available(args.out, args.force)
+        target_path, auto_name = _resolve_output_path(args.out, args.force)
+        if not args.json:
+            print(f"The design will be saved to {os.path.abspath(target_path)}")
         mode_info = hosted_client.detect_mode(args.api_url)
         if not mode_info.get("hosted"):
             print("--job needs a hosted server.", file=sys.stderr)
             sys.exit(1)
         result = hosted_client.poll_job(args.api_url, args.job)
-        _finish_job_result(result, args, args.job)
+        _finish_job_result(result, args, args.job, target_path, auto=auto_name)
         return
 
     if not args.input:
@@ -1045,19 +1100,22 @@ def main():
         print(f"dry-run: preview: {clean_text[:200]}")
         return
 
-    # --- refuse early if the output file already exists -----------------------
-    # Before any request (healthz included): losing a hosted run's quota to a
-    # file-exists error discovered only after the design is finished is the
-    # bug this guards against. Applies to both the hosted and local flows below.
+    # --- resolve output path before any request --------------------------------
+    # Auto-number the default name so a second run never hits "file exists".
+    # Explicit --out without --force still errors early (before burning quota).
 
-    _check_output_path_available(args.out, args.force)
+    target_path, auto_name = _resolve_output_path(args.out, args.force)
+    if not args.json:
+        print(f"The design will be saved to {os.path.abspath(target_path)}")
 
     # --- mode detection: decide hosted vs. the existing local flow -------------
 
     mode_info = hosted_client.detect_mode(args.api_url)
 
     if mode_info.get("hosted"):
-        _run_hosted_flow(clean_text, access_code, args, mode_info)
+        _run_hosted_flow(
+            clean_text, access_code, args, mode_info, target_path, auto=auto_name,
+        )
         return
 
     # --- existing local flow, unchanged -----------------------------------------
@@ -1072,8 +1130,9 @@ def main():
         args.api_url,
         json_mode=args.json,
         stage=effective_stage,
-        out_path=args.out,
+        out_path=target_path,
         force=args.force,
+        auto=auto_name,
         max_revisions=args.max_revisions,
         mode=args.mode,
     )
