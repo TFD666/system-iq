@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-WAKE_TIMEOUT_SECONDS = 90
+WAKE_TIMEOUT_SECONDS = 240
 WAKE_POLL_SECONDS = 5
 JOB_POLL_SECONDS = 5
 JOB_TIMEOUT_SECONDS = 1200
@@ -64,7 +64,7 @@ def get_healthz(url: str, timeout: float = HEALTHZ_TIMEOUT) -> dict | None:
     """One healthz attempt. None on any connection problem, bad status or bad body."""
     try:
         response = httpx.get(f"{url}/healthz", timeout=timeout)
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except httpx.HTTPError:
         return None
     if response.status_code != 200:
         return None
@@ -88,7 +88,7 @@ def detect_mode(url: str, sleep=time.sleep) -> dict:
         print("error: backend not running, start it first", file=sys.stderr)
         sys.exit(1)
 
-    print("Server waking up, this can take up to 1 minute...", file=sys.stderr)
+    print("Server waking up, this can take a minute or two...", file=sys.stderr)
     waited = 0
     while waited < WAKE_TIMEOUT_SECONDS:
         sleep(WAKE_POLL_SECONDS)
@@ -180,7 +180,7 @@ def submit_job(url: str, access_code: str, idea: str) -> dict:
             headers={"X-Access-Code": access_code},
             timeout=REQUEST_TIMEOUT,
         )
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except httpx.HTTPError:
         print("error: could not reach the server", file=sys.stderr)
         sys.exit(1)
 
@@ -235,7 +235,7 @@ def poll_job(url: str, job_id: str, clock=time.time, sleep=time.sleep) -> dict:
 
         try:
             response = httpx.get(f"{url}/jobs/{job_id}", timeout=REQUEST_TIMEOUT)
-        except (httpx.ConnectError, httpx.TimeoutException):
+        except httpx.HTTPError:
             consecutive_errors += 1
             if consecutive_errors >= 3:
                 print("error: lost contact with the server while waiting for the job", file=sys.stderr)

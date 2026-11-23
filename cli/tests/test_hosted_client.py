@@ -101,6 +101,52 @@ class TestDetectMode:
         assert sleeps == [hosted_client.WAKE_POLL_SECONDS, hosted_client.WAKE_POLL_SECONDS]
         assert "waking up" in capsys.readouterr().err.lower()
 
+    def test_503_wake_loop_continues(self):
+        """503 from /healthz is not a crash -- wake loop retries until success."""
+        attempts = [
+            make_response(503, {"status": "error"}),
+            make_response(503, {"status": "error"}),
+            make_response(200, {"hosted": True, "max_idea_chars": 2000}),
+        ]
+        with patch("hosted_client.httpx.get", side_effect=attempts):
+            result = hosted_client.detect_mode(HOSTED_URL, sleep=lambda s: None)
+        assert result["hosted"] is True
+
+    def test_read_error_wake_loop_continues(self):
+        """ReadError (connection reset mid-response) must not crash the wake loop."""
+        attempts = [
+            httpx.ReadError("connection reset"),
+            httpx.ReadError("connection reset"),
+            make_response(200, {"hosted": True, "max_idea_chars": 2000}),
+        ]
+
+        def fake_get(url, *args, **kwargs):
+            item = attempts.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with patch("hosted_client.httpx.get", side_effect=fake_get):
+            result = hosted_client.detect_mode(HOSTED_URL, sleep=lambda s: None)
+        assert result["hosted"] is True
+
+    def test_remote_protocol_error_wake_loop_continues(self):
+        """RemoteProtocolError must not crash the wake loop."""
+        attempts = [
+            httpx.RemoteProtocolError("bad data"),
+            make_response(200, {"hosted": True, "max_idea_chars": 2000}),
+        ]
+
+        def fake_get(url, *args, **kwargs):
+            item = attempts.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with patch("hosted_client.httpx.get", side_effect=fake_get):
+            result = hosted_client.detect_mode(HOSTED_URL, sleep=lambda s: None)
+        assert result["hosted"] is True
+
     def test_non_localhost_gives_up_after_wake_timeout(self, capsys):
         sleeps = []
         with patch("hosted_client.httpx.get", side_effect=httpx.ConnectError("refused")):
@@ -225,6 +271,14 @@ class TestSubmitJob:
                 hosted_client.submit_job(URL, "mycode", "an idea")
         assert exc_info.value.code == 1
 
+    def test_read_error_in_submit(self, capsys):
+        """ReadError during submit gets a clean exit, not a traceback."""
+        with patch("hosted_client.httpx.post", side_effect=httpx.ReadError("reset")):
+            with pytest.raises(SystemExit) as exc_info:
+                hosted_client.submit_job(URL, "mycode", "an idea")
+        assert exc_info.value.code == 1
+        assert "could not reach" in capsys.readouterr().err
+
 
 # ── job polling ───────────────────────────────────────────────────────────────
 
@@ -314,6 +368,31 @@ class TestPollJob:
         with patch("hosted_client.httpx.get", side_effect=fake_get):
             result = hosted_client.poll_job(URL, "job1", clock=_fake_clock(), sleep=lambda s: None)
         assert result == {"ok": True}
+
+    def test_read_error_in_poll_recovers(self):
+        """A single ReadError during polling counts as transient and recovers."""
+        responses = [
+            httpx.ReadError("reset"),
+            make_response(200, {"status": "done", "stage": "done", "detail": None, "position": None, "error": None, "result": {"ok": True}}),
+        ]
+
+        def fake_get(url, *args, **kwargs):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with patch("hosted_client.httpx.get", side_effect=fake_get):
+            result = hosted_client.poll_job(URL, "job1", clock=_fake_clock(), sleep=lambda s: None)
+        assert result == {"ok": True}
+
+    def test_three_read_errors_in_poll_exit_1(self, capsys):
+        """Three consecutive ReadErrors abort the poll cleanly."""
+        with patch("hosted_client.httpx.get", side_effect=httpx.ReadError("reset")):
+            with pytest.raises(SystemExit) as exc_info:
+                hosted_client.poll_job(URL, "job1", clock=_fake_clock(), sleep=lambda s: None)
+        assert exc_info.value.code == 1
+        assert "lost contact" in capsys.readouterr().err
 
 
 def _fake_clock():
