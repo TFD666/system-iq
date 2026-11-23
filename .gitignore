@@ -36,3 +36,5 @@ capture/
 .env
 *.mp4
 *.exe
+.claude/
+.playwright-mcp/
