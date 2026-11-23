@@ -216,10 +216,13 @@
           </div>
         </div>
         <div class="section__body reveal">
+          <div class="try__notes">
+            <p>Needs Python 3.10 or newer (<a href="https://www.python.org/downloads/" rel="noopener noreferrer">python.org</a>, tick "Add python.exe to PATH"). Tested on Windows. No API keys needed.</p>
+          </div>
           <div class="code-box">
             <div class="code-box__label">INSTALL</div>
             <div class="code-box__inner">
-              <code id="cmd-install"><span class="clr-accent">$ </span>pip install "git+https://github.com/TFD666/system-iq.git#subdirectory=cli"</code>
+              <code id="cmd-install"><span class="clr-accent">$ </span>python -m pip install "https://github.com/TFD666/system-iq/archive/refs/heads/main.zip#subdirectory=cli"</code>
               <button class="copy-btn" type="button" data-target="cmd-install" aria-label="Copy install command">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
                 <span class="copy-btn__label">COPY</span>
@@ -242,9 +245,45 @@
             <span class="chip">daily capacity cap</span>
           </div>
           <div class="try__notes">
-            <p>Download a sample without an access code: <code>systemiq --sample 1</code></p>
-            <p>Command not found? Try <code>python -m systemiq</code> instead.</p>
+            <p>If the install or the command does not work, see the <a href="https://github.com/TFD666/system-iq#getting-started-step-by-step-windows" rel="noopener noreferrer">step-by-step guide</a>.</p>
           </div>
+          <div class="code-box__label">WHAT A RUN LOOKS LIKE</div>
+          <pre class="run-output">systemiq --access-code YOUR_CODE "A mobile app that shows nearby independent bookstores on a map ..."
+The design will be saved to C:\Users\YourName\system-design.md
+Job: &lt;job id&gt; (resume with --job &lt;job id&gt; within 60 minutes)
+Extracting requirements
+Writing design (2/4)
+Writing design (3/4)
+Writing design (4/4)
+Done
+design written to C:\Users\YourName\system-design.md
+design: 4 groups, 1 retries, 246.6 s, 4174/1690 tokens
+
+Validation:
+val_geospatial               ok              98%
+val_decision_api_style       ok              99%
+val_missing_component        flagged         87%   (sections 2, 8)
+val_invented                 possible        56%
+validation: flagged, 1 Jev requests
+
+Decisions:
+api_style                    REST                  99%  accepted
+primary_database             PostgreSQL + PostGIS  97%  accepted
+architecture_style           monolith              86%  accepted</pre>
+          <p class="try__caption">A real run (path and job id shortened). The full design is one Markdown file with 13 sections. A "flagged" finding is a hint to read those sections, not an error.</p>
+          <div class="try__notes">
+            <p>No code? Run <code>systemiq --sample 1</code> to download a ready-made design.</p>
+          </div>
+          <details class="try__trouble">
+            <summary>Something went wrong?</summary>
+            <ul>
+              <li><strong>Python not found</strong> - install from <a href="https://www.python.org/downloads/" rel="noopener noreferrer">python.org</a></li>
+              <li><strong>pip launcher error</strong> - use <code>python -m pip</code> instead of bare <code>pip</code></li>
+              <li><strong>systemiq not recognized</strong> - open a new PowerShell window, or use <code>python -m systemiq</code></li>
+              <li><strong>"Server waking up"</strong> - wait a few minutes, the free server sleeps when idle</li>
+              <li><strong>Daily limit reached</strong> - try tomorrow, or run <code>systemiq --sample 1</code> for a pre-built sample</li>
+            </ul>
+          </details>
         </div>
       </div>
     </section>

@@ -456,6 +456,52 @@ html:not(.has-js) .stage { cursor: default; }
   font: 400 13px/1 var(--mono); border: 1px solid var(--border);
 }
 
+/* ── run output ────────────────────────────────────────────────────── */
+
+.run-output {
+  background: var(--surface);
+  color: var(--text);
+  font: 400 14px/1.7 var(--mono);
+  padding: 20px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ── try caption ──────────────────────────────────────────────────── */
+
+.try__caption {
+  font-size: 14px;
+  color: var(--body);
+  line-height: 1.6;
+  margin-top: 12px;
+}
+
+/* ── troubleshooting details ──────────────────────────────────────── */
+
+.try__trouble {
+  margin-top: 24px;
+  font-size: 14px;
+  color: var(--body);
+}
+.try__trouble summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.try__trouble ul {
+  margin-top: 10px;
+  padding-left: 20px;
+  line-height: 1.8;
+}
+.try__trouble code {
+  background: var(--surface);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font: 400 13px/1 var(--mono);
+  border: 1px solid var(--border);
+}
+
 /* ── wave canvas ───────────────────────────────────────────────────── */
 
 .section--try { position: relative; overflow: hidden; }
